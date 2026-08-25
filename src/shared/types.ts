@@ -35,6 +35,9 @@ export interface PlannedBump {
   alertNumbers: number[];
   verdict?: BumpVerdict;
   verdictReason?: string;
+  prNumber?: number;
+  prUrl?: string;
+  ciStatus?: 'pending' | 'success' | 'failure' | 'no-checks';
 }
 
 export interface Campaign {
