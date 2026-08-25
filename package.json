@@ -1,0 +1,33 @@
+{
+  "name": "agentic-hack",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "genkit start -- tsx --watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@genkit-ai/express": "^1.41.0",
+    "@genkit-ai/google-genai": "^1.41.0",
+    "@google-cloud/firestore": "^7.11.6",
+    "@octokit/auth-app": "^8.3.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "genkit": "^1.41.0",
+    "octokit": "^5.0.5",
+    "semver": "^7.8.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.3.0",
+    "@types/semver": "^7.8.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}
