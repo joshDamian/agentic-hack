@@ -11,7 +11,8 @@ let app: App | null = null;
 function getApp(): App {
   if (app) return app;
 
-  const privateKey = fs.readFileSync(config.githubAppKeyPath, 'utf-8');
+  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY
+    ?? fs.readFileSync(config.githubAppKeyPath, 'utf-8');
   app = new App({
     appId: config.githubAppId,
     privateKey,

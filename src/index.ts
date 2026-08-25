@@ -6,9 +6,15 @@ import { prioritiseFlow } from './agents/prioritiser/index.js';
 import { safetyAnalyserFlow } from './agents/safety/index.js';
 import { executorFlow } from './agents/executor/index.js';
 import { monitorFlow } from './agents/monitor/index.js';
+import { pipelineFlow } from './pipeline.js';
+import { dashboardHandler } from './dashboard.js';
 
 const app = express();
 app.use(express.json());
+
+app.get('/', dashboardHandler);
+
+app.post('/pipeline', expressHandler(pipelineFlow));
 app.post('/listAlerts', expressHandler(listAlertsFlow));
 app.post('/prioritise', expressHandler(prioritiseFlow));
 app.post('/analyse', expressHandler(safetyAnalyserFlow));

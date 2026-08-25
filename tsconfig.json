@@ -4,6 +4,7 @@
     "moduleResolution": "nodenext",
     "target": "es2022",
     "strict": true,
+    "rootDir": "src",
     "outDir": "dist",
     "skipLibCheck": true
   },
