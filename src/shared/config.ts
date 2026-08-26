@@ -4,6 +4,7 @@ export const config = {
   githubAppId: process.env.GITHUB_APP_ID ?? '',
   githubAppKeyPath: process.env.GITHUB_APP_KEY_PATH ?? `${process.env.HOME}/.config/agentic-hack/github-app.pem`,
   githubInstallationId: process.env.GITHUB_INSTALLATION_ID ?? '',
+  githubAppSlug: process.env.GITHUB_APP_SLUG ?? '',
   targetRepo: {
     owner: process.env.TARGET_REPO_OWNER ?? 'joshDamian',
     name: process.env.TARGET_REPO_NAME ?? 'depbot-test-repo',

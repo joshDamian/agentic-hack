@@ -52,6 +52,12 @@ function toAlert(a: GitHubAlert): DependabotAlert {
   };
 }
 
+export async function listInstallationRepos(): Promise<Array<{ owner: string; name: string }>> {
+  const octokit = await getInstallationOctokit();
+  const { data } = await octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 100 });
+  return data.repositories.map((r) => ({ owner: r.owner.login, name: r.name }));
+}
+
 export async function listAlerts(
   owner: string,
   repo: string,

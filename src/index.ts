@@ -8,11 +8,31 @@ import { executorFlow } from './agents/executor/index.js';
 import { monitorFlow } from './agents/monitor/index.js';
 import { pipelineFlow } from './pipeline.js';
 import { dashboardHandler } from './dashboard.js';
+import { config } from './shared/config.js';
+import { listInstallationRepos } from './tools/github/client.js';
 
 const app = express();
 app.use(express.json());
 
 app.get('/', dashboardHandler);
+
+app.post('/trigger', (req, res) => {
+  const owner = (req.body.owner as string) || config.targetRepo.owner;
+  const repo = (req.body.repo as string) || config.targetRepo.name;
+  console.log(`Pipeline triggered for ${owner}/${repo}`);
+  pipelineFlow({ owner, repo }).catch((err) => console.error('Pipeline error:', err));
+  res.json({ started: true, owner, repo });
+});
+
+app.get('/api/repos', async (_req, res) => {
+  try {
+    const repos = await listInstallationRepos();
+    res.json(repos);
+  } catch (err) {
+    console.error('Failed to list repos:', err);
+    res.status(500).json({ error: 'Failed to list repos' });
+  }
+});
 
 app.post('/pipeline', expressHandler(pipelineFlow));
 app.post('/listAlerts', expressHandler(listAlertsFlow));
