@@ -4,6 +4,7 @@ import { extractBreakingChanges } from './changelog.js';
 import { scanForUsage } from './usage.js';
 import { getCampaign, updateCampaign } from '../../tools/firestore/client.js';
 import type { BumpVerdict, PlannedBump } from '../../shared/types.js';
+import { withRetry } from '../../shared/retry.js';
 
 const findingSchema = z.object({
   file: z.string(),
@@ -55,9 +56,9 @@ export async function classifyBump(
     };
   }
 
-  const { output } = await ai.generate({
-    // gemini-3.5-pro not yet available on Vertex AI — swap when it launches
-    prompt: `You are a dependency upgrade safety classifier. Analyse each usage hit against the breaking changes and give a concrete verdict.
+  const { output } = await withRetry(() =>
+    ai.generate({
+      prompt: `You are a dependency upgrade safety classifier. Analyse each usage hit against the breaking changes and give a concrete verdict.
 
 Package: ${bump.packageName}
 Upgrade: ${bump.currentVersion} → ${bump.targetVersion}
@@ -89,8 +90,9 @@ For the overall verdict:
 - "unknown" only if the code is too ambiguous to classify.
 
 In the reason field, structure as: what changed → what the codebase uses → whether it's affected.`,
-    output: { schema: classificationSchema },
-  });
+      output: { schema: classificationSchema },
+    }),
+  );
 
   return {
     verdict: output!.verdict,

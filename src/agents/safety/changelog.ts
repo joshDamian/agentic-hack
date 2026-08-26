@@ -3,6 +3,7 @@ import { ai } from '../../genkit.js';
 import { resolveGitHubRepo } from '../../tools/npm/registry.js';
 import { fetchReleaseNotes } from '../../tools/github/releases.js';
 import type { PlannedBump } from '../../shared/types.js';
+import { withRetry } from '../../shared/retry.js';
 
 export const breakingChangeSchema = z.object({
   hasBreakingChanges: z.boolean(),
@@ -33,8 +34,9 @@ export async function extractBreakingChanges(bump: PlannedBump): Promise<Breakin
     return { hasBreakingChanges: false, changes: [] };
   }
 
-  const { output } = await ai.generate({
-    prompt: `You are analysing release notes for the npm package "${bump.packageName}" to identify breaking changes between version ${bump.currentVersion} and ${bump.targetVersion}.
+  const { output } = await withRetry(() =>
+    ai.generate({
+      prompt: `You are analysing release notes for the npm package "${bump.packageName}" to identify breaking changes between version ${bump.currentVersion} and ${bump.targetVersion}.
 
 Extract every breaking change — removed APIs, renamed functions, changed method signatures, changed default behaviour. Focus on changes that would require code modifications.
 
@@ -43,8 +45,9 @@ If there are no breaking changes, set hasBreakingChanges to false and return an 
 Release notes:
 
 ${releaseNotes}`,
-    output: { schema: breakingChangeSchema },
-  });
+      output: { schema: breakingChangeSchema },
+    }),
+  );
 
   return output!;
 }
