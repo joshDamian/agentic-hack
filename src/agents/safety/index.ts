@@ -42,6 +42,17 @@ export async function classifyBump(
   });
 
   if (!breakingChanges.hasBreakingChanges) {
+    const from = bump.currentVersion.split('.')[0];
+    const to = bump.targetVersion.split('.')[0];
+    const isMajorBump = from !== to;
+    if (isMajorBump) {
+      return {
+        verdict: 'unknown',
+        reason: `Major version bump (${from}.x → ${to}.x) but no breaking changes found in release notes. Manual review recommended.`,
+        breakingChanges: [],
+        findings: [],
+      };
+    }
     return { verdict: 'safe', reason: 'No breaking changes in release notes.', breakingChanges: [], findings: [] };
   }
 

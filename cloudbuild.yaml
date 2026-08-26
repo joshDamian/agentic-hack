@@ -20,7 +20,7 @@ steps:
       - --image=$_IMAGE
       - --region=europe-west3
       - --set-env-vars=GOOGLE_CLOUD_PROJECT=all-things-agentic-506113,GOOGLE_CLOUD_LOCATION=europe-west3,GITHUB_APP_ID=4715039,GITHUB_INSTALLATION_ID=156496674,TARGET_REPO_OWNER=joshDamian,TARGET_REPO_NAME=depbot-test-repo,GITHUB_APP_SLUG=depbot-triage-dev
-      - --set-secrets=GITHUB_APP_PRIVATE_KEY=github-app-key:latest
+      - --set-secrets=GITHUB_APP_PRIVATE_KEY=github-app-key:latest,GITHUB_TOKEN=github-token:latest
 
 substitutions:
   _IMAGE: europe-west3-docker.pkg.dev/all-things-agentic-506113/cloud-run-source-deploy/depbot-triage:${SHORT_SHA}
