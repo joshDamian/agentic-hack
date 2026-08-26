@@ -5,6 +5,9 @@ import { scanForUsage } from './usage.js';
 import { getCampaign, updateCampaign } from '../../tools/firestore/client.js';
 import type { BumpVerdict, PlannedBump } from '../../shared/types.js';
 import { withRetry } from '../../shared/retry.js';
+import { getPackageTypeDiff } from '../../tools/npm/typediff.js';
+import { compileCheck } from '../../tools/npm/compile-check.js';
+import { getFileContent, getInstallationOctokit } from '../../tools/github/client.js';
 
 const findingSchema = z.object({
   file: z.string(),
@@ -27,11 +30,57 @@ export interface ClassificationResult {
   findings: PlannedBump['findings'];
 }
 
+async function findFilesImporting(
+  owner: string,
+  repo: string,
+  packageName: string,
+): Promise<string[]> {
+  try {
+    const octokit = await getInstallationOctokit();
+    const { data } = await octokit.rest.search.code({
+      q: `"${packageName}" repo:${owner}/${repo} language:typescript`,
+      per_page: 20,
+    });
+    return data.items
+      .map((item) => item.path)
+      .filter((p) => p.match(/\.(ts|tsx)$/) && !p.endsWith('.d.ts') && p !== 'package.json' && p !== 'package-lock.json');
+  } catch {
+    return [];
+  }
+}
+
+async function collectSourceFiles(
+  owner: string,
+  repo: string,
+  packageName: string,
+  filePaths: string[],
+): Promise<Map<string, string>> {
+  const sources = new Map<string, string>();
+  for (const filePath of filePaths) {
+    if (!filePath.match(/\.(ts|tsx)$/) || filePath.endsWith('.d.ts')) continue;
+    try {
+      const content = await getFileContent(owner, repo, filePath);
+      if (content.includes(packageName)) {
+        sources.set(filePath, content);
+      }
+    } catch {}
+  }
+  return sources;
+}
+
 export async function classifyBump(
   owner: string,
   repo: string,
   bump: PlannedBump,
 ): Promise<ClassificationResult> {
+  // Tier 2: type definition diff
+  console.log(`    Tier 2: type diff for ${bump.packageName}...`);
+  const typeDiff = getPackageTypeDiff(bump.packageName, bump.currentVersion, bump.targetVersion);
+  if (typeDiff.hasDtsChanges) {
+    console.log(`    Got ${typeDiff.diff.split('\n').length} lines of type changes`);
+  }
+
+  // Tier 3: changelog/release notes extraction
   const breakingChanges = await extractBreakingChanges(bump);
   const bcData = breakingChanges.changes.map((c) => {
     const entry: { api: string; kind: string; description: string; migrationHint?: string } = {
@@ -41,14 +90,67 @@ export async function classifyBump(
     return entry;
   });
 
-  if (!breakingChanges.hasBreakingChanges) {
+  // Scan for usage (needed for LLM classification)
+  const usageHits = await scanForUsage(owner, repo, breakingChanges, bump.packageName);
+  const filesWithUsage = [...new Set(usageHits.map((h) => h.file))];
+
+  // Tier 1: compile check (TypeScript repos only)
+  // When changelog found nothing, usageHits is empty — find files independently
+  const compileFiles = filesWithUsage.length > 0
+    ? filesWithUsage
+    : await findFilesImporting(owner, repo, bump.packageName);
+  const sourceFiles = await collectSourceFiles(owner, repo, bump.packageName, compileFiles);
+  let compileResult = { errors: [] as { file: string; line: number; message: string }[], ran: false };
+  if (sourceFiles.size > 0) {
+    console.log(`    Tier 1: compile check (${sourceFiles.size} files)...`);
+    compileResult = await compileCheck(bump.packageName, bump.targetVersion, sourceFiles);
+    if (compileResult.errors.length > 0) {
+      console.log(`    Found ${compileResult.errors.length} compile errors`);
+    }
+  }
+
+  // Compiler errors are definitive — auto-risky
+  if (compileResult.errors.length > 0) {
+    const compilerFindings = compileResult.errors.map((e) => ({
+      file: e.file,
+      line: e.line,
+      isAffected: true,
+      analysis: `Compiler error: ${e.message}`,
+    }));
+
+    const errorSummary = compileResult.errors
+      .map((e) => `${e.file}:${e.line}: ${e.message}`)
+      .join('; ');
+
+    return {
+      verdict: 'risky',
+      reason: `TypeScript compilation fails with the new version. ${errorSummary}`,
+      breakingChanges: bcData.length > 0 ? bcData : compileResult.errors.map((e) => ({
+        api: extractApiFromError(e.message),
+        kind: 'removed' as const,
+        description: e.message,
+      })),
+      findings: compilerFindings,
+    };
+  }
+
+  // No breaking changes from changelog and no type diff — likely safe
+  if (!breakingChanges.hasBreakingChanges && !typeDiff.hasDtsChanges) {
     const from = bump.currentVersion.split('.')[0];
     const to = bump.targetVersion.split('.')[0];
     const isMajorBump = from !== to;
-    if (isMajorBump) {
+    if (isMajorBump && !compileResult.ran) {
       return {
         verdict: 'unknown',
-        reason: `Major version bump (${from}.x → ${to}.x) but no breaking changes found in release notes. Manual review recommended.`,
+        reason: `Major version bump (${from}.x → ${to}.x) but no breaking changes found in release notes or type definitions. Manual review recommended.`,
+        breakingChanges: [],
+        findings: [],
+      };
+    }
+    if (isMajorBump && compileResult.ran) {
+      return {
+        verdict: 'safe',
+        reason: `Major version bump but code compiles cleanly against the new version and no breaking changes found.`,
         breakingChanges: [],
         findings: [],
       };
@@ -56,9 +158,7 @@ export async function classifyBump(
     return { verdict: 'safe', reason: 'No breaking changes in release notes.', breakingChanges: [], findings: [] };
   }
 
-  const usageHits = await scanForUsage(owner, repo, breakingChanges, bump.packageName);
-
-  if (usageHits.length === 0) {
+  if (usageHits.length === 0 && !typeDiff.hasDtsChanges) {
     return {
       verdict: 'safe',
       reason: `Breaking changes found (${bcData.map((c) => c.api).join(', ')}) but no usage of those APIs in this codebase.`,
@@ -67,19 +167,49 @@ export async function classifyBump(
     };
   }
 
-  const { output } = await withRetry(() =>
-    ai.generate({
-      prompt: `You are a dependency upgrade safety classifier. Analyse each usage hit against the breaking changes and give a concrete verdict.
+  if (usageHits.length === 0 && typeDiff.hasDtsChanges && compileResult.ran) {
+    return {
+      verdict: 'safe',
+      reason: `Type definitions changed but code compiles cleanly against the new version.`,
+      breakingChanges: bcData,
+      findings: [],
+    };
+  }
 
-Package: ${bump.packageName}
-Upgrade: ${bump.currentVersion} → ${bump.targetVersion}
+  // Build evidence for the LLM
+  const evidenceSections: string[] = [];
 
-## Breaking changes in this upgrade
+  if (typeDiff.hasDtsChanges) {
+    evidenceSections.push(`## Type definition changes (npm diff of .d.ts files)
+This is the actual structural diff of the package's TypeScript type definitions between the old and new versions. Removed exports, changed signatures, and renamed APIs appear here as concrete evidence.
+
+\`\`\`diff
+${typeDiff.diff}
+\`\`\``);
+  }
+
+  if (breakingChanges.hasBreakingChanges) {
+    evidenceSections.push(`## Breaking changes from release notes
 ${breakingChanges.changes.map((c) => {
   let line = `- **${c.kind}**: \`${c.api}\` — ${c.description}`;
   if (c.migrationHint) line += `\n  Migration: ${c.migrationHint}`;
   return line;
-}).join('\n')}
+}).join('\n')}`);
+  }
+
+  if (compileResult.ran && compileResult.errors.length === 0) {
+    evidenceSections.push(`## Compile check result
+The codebase compiles successfully against ${bump.packageName}@${newVersion(bump)}. This means type-level API changes (removed exports, changed signatures) do NOT affect this code. However, runtime behaviour changes may still apply.`);
+  }
+
+  const { output } = await withRetry(() =>
+    ai.generate({
+      prompt: `You are a dependency upgrade safety classifier. Analyse each usage hit against the evidence and give a concrete verdict.
+
+Package: ${bump.packageName}
+Upgrade: ${bump.currentVersion} → ${bump.targetVersion}
+
+${evidenceSections.join('\n\n')}
 
 ## Usage found in the codebase
 ${usageHits.map((h) => `### ${h.file}:${h.line}
@@ -92,6 +222,8 @@ ${h.context}
 For each usage hit above, output a finding:
 - Set isAffected to true ONLY if the code actually calls a broken API in a way that would fail after the upgrade.
 - Set isAffected to false for: import statements that don't call the broken method, false positive text matches, comments, unrelated code.
+- The type definition diff is concrete evidence of what actually changed in the API. If a function or class is removed in the diff, code that calls it IS affected. If the diff shows a signature change, check if the code uses the changed parameters.
+- If the compile check passed, type-level breakages are ruled out — focus on runtime behaviour changes only.
 - In analysis, be specific: name the breaking change, say what the code does, say why it is or isn't affected.
 - If affected, provide suggestedFix with the corrected code.
 
@@ -117,6 +249,18 @@ In the reason field, structure as: what changed → what the codebase uses → w
       return entry;
     }),
   };
+}
+
+function newVersion(bump: PlannedBump): string {
+  return bump.targetVersion;
+}
+
+function extractApiFromError(message: string): string {
+  const propMatch = message.match(/Property '(\w+)' does not exist/);
+  if (propMatch) return propMatch[1];
+  const moduleMatch = message.match(/Cannot find module '([^']+)'/);
+  if (moduleMatch) return moduleMatch[1];
+  return 'unknown';
 }
 
 export const safetyAnalyserFlow = ai.defineFlow(
