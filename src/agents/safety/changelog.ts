@@ -4,6 +4,7 @@ import { resolveGitHubRepo } from '../../tools/npm/registry.js';
 import { fetchReleaseNotes } from '../../tools/github/releases.js';
 import type { PlannedBump } from '../../shared/types.js';
 import { withRetry } from '../../shared/retry.js';
+import semver from 'semver';
 
 export const breakingChangeSchema = z.object({
   hasBreakingChanges: z.boolean(),
@@ -38,9 +39,13 @@ export async function extractBreakingChanges(bump: PlannedBump): Promise<Breakin
     ai.generate({
       prompt: `You are analysing release notes for the npm package "${bump.packageName}" to identify breaking changes between version ${bump.currentVersion} and ${bump.targetVersion}.
 
-Extract every breaking change — removed APIs, renamed functions, changed method signatures, changed default behaviour. Focus on changes that would require code modifications.
+Extract every breaking change — removed APIs, renamed functions, changed method signatures, changed default behaviour, dropped Node.js version support, removed options or parameters, sync-to-async migration. Focus on changes that would require code modifications.
 
-If there are no breaking changes, set hasBreakingChanges to false and return an empty changes array.
+Look carefully for sections titled "Breaking Changes", "BREAKING", "Migration", or similar. Also look for entries marked as "removed", "deprecated", "no longer supported", or "replaced by".
+
+This is a ${semver.major(bump.targetVersion) > semver.major(bump.currentVersion) ? 'major' : 'minor/patch'} version bump. ${semver.major(bump.targetVersion) > semver.major(bump.currentVersion) ? 'Major version bumps almost always contain breaking changes — look thoroughly.' : ''}
+
+Only set hasBreakingChanges to false if you are confident there are genuinely no breaking changes in the notes.
 
 Release notes:
 

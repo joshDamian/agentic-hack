@@ -45,7 +45,13 @@ export async function createBranchAndPR(
 
   try {
     await octokit.rest.git.getRef({ owner, repo, ref: `heads/${branchName}` });
-    throw new Error(`Branch ${branchName} already exists`);
+    const { data: prs } = await octokit.rest.pulls.list({
+      owner, repo, head: `${owner}:${branchName}`, state: 'open',
+    });
+    if (prs.length > 0) {
+      return { prNumber: prs[0].number, prUrl: prs[0].html_url, branchName };
+    }
+    await octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${branchName}` });
   } catch (err: any) {
     if (err.status !== 404) throw err;
   }
