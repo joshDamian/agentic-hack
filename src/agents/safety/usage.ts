@@ -53,6 +53,24 @@ function extractSearchTerms(api: string): string[] {
   return [...terms];
 }
 
+function isSourceFile(filePath: string): boolean {
+  return /\.(ts|tsx|js|jsx|mts|mjs|cts|cjs)$/.test(filePath);
+}
+
+async function searchCode(
+  octokit: Awaited<ReturnType<typeof getInstallationOctokit>>,
+  query: string,
+  filesToScan: Set<string>,
+): Promise<void> {
+  try {
+    await rateLimitedSearch();
+    const { data } = await octokit.rest.search.code({ q: query, per_page: 30 });
+    for (const item of data.items) {
+      if (isSourceFile(item.path)) filesToScan.add(item.path);
+    }
+  } catch {}
+}
+
 export async function scanForUsage(
   owner: string,
   repo: string,
@@ -66,39 +84,28 @@ export async function scanForUsage(
   const seenFiles = new Set<string>();
 
   const filesToScan = new Set<string>();
+  const repoScope = `repo:${owner}/${repo}`;
 
   if (packageName) {
-    try {
-      await rateLimitedSearch();
-      const { data } = await octokit.rest.search.code({
-        q: `${packageName} repo:${owner}/${repo}`,
-        per_page: 10,
-      });
-      for (const item of data.items) {
-        if (item.path !== 'package.json' && item.path !== 'package-lock.json') {
-          filesToScan.add(item.path);
-        }
-      }
-    } catch {}
+    await searchCode(octokit, `"${packageName}" ${repoScope}`, filesToScan);
   }
 
-  if (filesToScan.size === 0) {
-    for (const change of breakingChanges.changes) {
-      for (const term of extractSearchTerms(change.api)) {
-        try {
-          await rateLimitedSearch();
-          const { data } = await octokit.rest.search.code({
-            q: `${term} repo:${owner}/${repo}`,
-            per_page: 10,
-          });
-          for (const item of data.items) {
-            if (item.path !== 'package.json' && item.path !== 'package-lock.json') {
-              filesToScan.add(item.path);
-            }
-          }
-        } catch {}
-      }
+  const allTerms = new Set<string>();
+  for (const change of breakingChanges.changes) {
+    for (const term of extractSearchTerms(change.api)) {
+      allTerms.add(term);
     }
+  }
+
+  const termChunks: string[][] = [];
+  const termsArray = [...allTerms];
+  for (let i = 0; i < termsArray.length; i += 4) {
+    termChunks.push(termsArray.slice(i, i + 4));
+  }
+
+  for (const chunk of termChunks) {
+    const orQuery = chunk.map((t) => `"${t}"`).join(' OR ');
+    await searchCode(octokit, `${orQuery} ${repoScope}`, filesToScan);
   }
 
   for (const change of breakingChanges.changes) {
