@@ -2,6 +2,36 @@ import type { Request, Response } from 'express';
 import { listCampaigns } from './tools/firestore/client.js';
 import { config } from './shared/config.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
+import hljs from 'highlight.js/lib/core';
+import javascript from 'highlight.js/lib/languages/javascript';
+import typescript from 'highlight.js/lib/languages/typescript';
+import python from 'highlight.js/lib/languages/python';
+import ruby from 'highlight.js/lib/languages/ruby';
+import go from 'highlight.js/lib/languages/go';
+import rust from 'highlight.js/lib/languages/rust';
+import java from 'highlight.js/lib/languages/java';
+import json from 'highlight.js/lib/languages/json';
+import yaml from 'highlight.js/lib/languages/yaml';
+import bash from 'highlight.js/lib/languages/bash';
+import css from 'highlight.js/lib/languages/css';
+import xml from 'highlight.js/lib/languages/xml';
+import sql from 'highlight.js/lib/languages/sql';
+import php from 'highlight.js/lib/languages/php';
+
+hljs.registerLanguage('javascript', javascript);
+hljs.registerLanguage('typescript', typescript);
+hljs.registerLanguage('python', python);
+hljs.registerLanguage('ruby', ruby);
+hljs.registerLanguage('go', go);
+hljs.registerLanguage('rust', rust);
+hljs.registerLanguage('java', java);
+hljs.registerLanguage('json', json);
+hljs.registerLanguage('yaml', yaml);
+hljs.registerLanguage('bash', bash);
+hljs.registerLanguage('css', css);
+hljs.registerLanguage('xml', xml);
+hljs.registerLanguage('sql', sql);
+hljs.registerLanguage('php', php);
 
 const SCHEDULE_HOUR = Number(process.env.PIPELINE_SCHEDULE_HOUR ?? '2');
 const SCHEDULE_TZ = process.env.PIPELINE_TIMEZONE ?? 'Africa/Lagos';
@@ -224,6 +254,24 @@ function renderBumpRow(c: Campaign, b: PlannedBump, i: number): string {
   </div>`;
 }
 
+const EXT_LANG: Record<string, string> = {
+  '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
+  '.ts': 'typescript', '.tsx': 'typescript', '.mts': 'typescript',
+  '.py': 'python', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
+  '.java': 'java', '.json': 'json', '.yml': 'yaml', '.yaml': 'yaml',
+  '.sh': 'bash', '.css': 'css', '.html': 'xml', '.xml': 'xml',
+  '.sql': 'sql', '.php': 'php',
+};
+
+function highlightCode(code: string, filePath: string): string {
+  const dot = filePath.lastIndexOf('.');
+  const lang = dot !== -1 ? EXT_LANG[filePath.slice(dot)] : undefined;
+  if (lang) {
+    return hljs.highlight(code, { language: lang }).value;
+  }
+  return hljs.highlightAuto(code).value;
+}
+
 function renderDetail(b: PlannedBump): string {
   let html = '';
 
@@ -256,14 +304,19 @@ function renderDetail(b: PlannedBump): string {
       html += `<div class="finding affected">
         <div class="finding-loc">${esc(f.file)}:${f.line}</div>
         <p>${esc(f.analysis)}</p>
-        ${f.suggestedFix ? `<pre class="code-block">${esc(f.suggestedFix)}</pre>` : ''}
+        ${f.suggestedFix ? `<pre class="code-block">${highlightCode(f.suggestedFix, f.file)}</pre>` : ''}
       </div>`;
     }
-    for (const f of ok) {
-      html += `<div class="finding ok">
-        <div class="finding-loc">${esc(f.file)}:${f.line}</div>
-        <p>${esc(f.analysis)}</p>
-      </div>`;
+    if (ok.length > 0) {
+      html += `<button class="fp-toggle" onclick="event.stopPropagation(); var t=this.nextElementSibling; var open=t.classList.toggle('open'); this.textContent=open ? 'Hide checked but not affected (${ok.length})' : 'Checked but not affected (${ok.length})';">Checked but not affected (${ok.length})</button>`;
+      html += '<div class="fp-group">';
+      for (const f of ok) {
+        html += `<div class="finding ok">
+          <div class="finding-loc">${esc(f.file)}:${f.line}</div>
+          <p>${esc(f.analysis)}</p>
+        </div>`;
+      }
+      html += '</div>';
     }
     html += '</div>';
   }
@@ -703,12 +756,112 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .finding.affected .finding-loc { color: var(--risk); }
 .finding.ok .finding-loc { color: var(--text-faint); }
 .finding p { line-height: 1.45; }
+.fp-toggle {
+  background: none; border: none; cursor: pointer; padding: 0; margin-top: 0.25rem;
+  font-family: 'Source Sans 3', sans-serif; font-size: 0.75rem; font-weight: 600;
+  color: var(--text-faint); transition: color 0.15s;
+}
+.fp-toggle:hover { color: var(--accent); }
+.fp-group { display: none; margin-top: 0.375rem; }
+.fp-group.open { display: block; }
 .code-block {
   font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
   background: var(--surface); border: 1px solid var(--edge); border-radius: 3px;
   padding: 0.5rem 0.75rem; margin-top: 0.375rem; overflow-x: auto; white-space: pre;
   color: var(--text);
 }
+.code-block .hljs-doctag, .code-block .hljs-keyword, .code-block .hljs-meta .hljs-keyword,
+.code-block .hljs-template-tag, .code-block .hljs-template-variable,
+.code-block .hljs-type, .code-block .hljs-variable.language_ { color: #d73a49; }
+.code-block .hljs-title, .code-block .hljs-title.class_,
+.code-block .hljs-title.class_.inherited__, .code-block .hljs-title.function_ { color: #6f42c1; }
+.code-block .hljs-attr, .code-block .hljs-attribute, .code-block .hljs-literal,
+.code-block .hljs-meta, .code-block .hljs-number, .code-block .hljs-operator,
+.code-block .hljs-selector-attr, .code-block .hljs-selector-class,
+.code-block .hljs-selector-id, .code-block .hljs-variable { color: #005cc5; }
+.code-block .hljs-meta .hljs-string, .code-block .hljs-regexp,
+.code-block .hljs-string { color: #032f62; }
+.code-block .hljs-built_in, .code-block .hljs-symbol { color: #e36209; }
+.code-block .hljs-code, .code-block .hljs-comment, .code-block .hljs-formula { color: #6a737d; }
+.code-block .hljs-name, .code-block .hljs-quote,
+.code-block .hljs-selector-pseudo, .code-block .hljs-selector-tag { color: #22863a; }
+.code-block .hljs-subst { color: #24292e; }
+.code-block .hljs-section { color: #005cc5; font-weight: 700; }
+.code-block .hljs-emphasis { font-style: italic; }
+.code-block .hljs-strong { font-weight: 700; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .code-block .hljs-doctag,
+  :root:not([data-theme="light"]) .code-block .hljs-keyword,
+  :root:not([data-theme="light"]) .code-block .hljs-meta .hljs-keyword,
+  :root:not([data-theme="light"]) .code-block .hljs-template-tag,
+  :root:not([data-theme="light"]) .code-block .hljs-template-variable,
+  :root:not([data-theme="light"]) .code-block .hljs-type,
+  :root:not([data-theme="light"]) .code-block .hljs-variable.language_ { color: #ff7b72; }
+  :root:not([data-theme="light"]) .code-block .hljs-title,
+  :root:not([data-theme="light"]) .code-block .hljs-title.class_,
+  :root:not([data-theme="light"]) .code-block .hljs-title.class_.inherited__,
+  :root:not([data-theme="light"]) .code-block .hljs-title.function_ { color: #d2a8ff; }
+  :root:not([data-theme="light"]) .code-block .hljs-attr,
+  :root:not([data-theme="light"]) .code-block .hljs-attribute,
+  :root:not([data-theme="light"]) .code-block .hljs-literal,
+  :root:not([data-theme="light"]) .code-block .hljs-meta,
+  :root:not([data-theme="light"]) .code-block .hljs-number,
+  :root:not([data-theme="light"]) .code-block .hljs-operator,
+  :root:not([data-theme="light"]) .code-block .hljs-selector-attr,
+  :root:not([data-theme="light"]) .code-block .hljs-selector-class,
+  :root:not([data-theme="light"]) .code-block .hljs-selector-id,
+  :root:not([data-theme="light"]) .code-block .hljs-variable { color: #79c0ff; }
+  :root:not([data-theme="light"]) .code-block .hljs-meta .hljs-string,
+  :root:not([data-theme="light"]) .code-block .hljs-regexp,
+  :root:not([data-theme="light"]) .code-block .hljs-string { color: #a5d6ff; }
+  :root:not([data-theme="light"]) .code-block .hljs-built_in,
+  :root:not([data-theme="light"]) .code-block .hljs-symbol { color: #ffa657; }
+  :root:not([data-theme="light"]) .code-block .hljs-code,
+  :root:not([data-theme="light"]) .code-block .hljs-comment,
+  :root:not([data-theme="light"]) .code-block .hljs-formula { color: #8b949e; }
+  :root:not([data-theme="light"]) .code-block .hljs-name,
+  :root:not([data-theme="light"]) .code-block .hljs-quote,
+  :root:not([data-theme="light"]) .code-block .hljs-selector-pseudo,
+  :root:not([data-theme="light"]) .code-block .hljs-selector-tag { color: #7ee787; }
+  :root:not([data-theme="light"]) .code-block .hljs-subst { color: #c9d1d9; }
+  :root:not([data-theme="light"]) .code-block .hljs-section { color: #1f6feb; font-weight: 700; }
+}
+:root[data-theme="dark"] .code-block .hljs-doctag,
+:root[data-theme="dark"] .code-block .hljs-keyword,
+:root[data-theme="dark"] .code-block .hljs-meta .hljs-keyword,
+:root[data-theme="dark"] .code-block .hljs-template-tag,
+:root[data-theme="dark"] .code-block .hljs-template-variable,
+:root[data-theme="dark"] .code-block .hljs-type,
+:root[data-theme="dark"] .code-block .hljs-variable.language_ { color: #ff7b72; }
+:root[data-theme="dark"] .code-block .hljs-title,
+:root[data-theme="dark"] .code-block .hljs-title.class_,
+:root[data-theme="dark"] .code-block .hljs-title.class_.inherited__,
+:root[data-theme="dark"] .code-block .hljs-title.function_ { color: #d2a8ff; }
+:root[data-theme="dark"] .code-block .hljs-attr,
+:root[data-theme="dark"] .code-block .hljs-attribute,
+:root[data-theme="dark"] .code-block .hljs-literal,
+:root[data-theme="dark"] .code-block .hljs-meta,
+:root[data-theme="dark"] .code-block .hljs-number,
+:root[data-theme="dark"] .code-block .hljs-operator,
+:root[data-theme="dark"] .code-block .hljs-selector-attr,
+:root[data-theme="dark"] .code-block .hljs-selector-class,
+:root[data-theme="dark"] .code-block .hljs-selector-id,
+:root[data-theme="dark"] .code-block .hljs-variable { color: #79c0ff; }
+:root[data-theme="dark"] .code-block .hljs-meta .hljs-string,
+:root[data-theme="dark"] .code-block .hljs-regexp,
+:root[data-theme="dark"] .code-block .hljs-string { color: #a5d6ff; }
+:root[data-theme="dark"] .code-block .hljs-built_in,
+:root[data-theme="dark"] .code-block .hljs-symbol { color: #ffa657; }
+:root[data-theme="dark"] .code-block .hljs-code,
+:root[data-theme="dark"] .code-block .hljs-comment,
+:root[data-theme="dark"] .code-block .hljs-formula { color: #8b949e; }
+:root[data-theme="dark"] .code-block .hljs-name,
+:root[data-theme="dark"] .code-block .hljs-quote,
+:root[data-theme="dark"] .code-block .hljs-selector-pseudo,
+:root[data-theme="dark"] .code-block .hljs-selector-tag { color: #7ee787; }
+:root[data-theme="dark"] .code-block .hljs-subst { color: #c9d1d9; }
+:root[data-theme="dark"] .code-block .hljs-section { color: #1f6feb; font-weight: 700; }
 
 .history { margin-top: 2.25rem; }
 .history-title {

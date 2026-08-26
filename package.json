@@ -20,6 +20,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "genkit": "^1.41.0",
+    "highlight.js": "^11.12.0",
     "octokit": "^5.0.5",
     "semver": "^7.8.5"
   },
