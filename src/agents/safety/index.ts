@@ -14,7 +14,7 @@ const findingSchema = z.object({
   line: z.number(),
   isAffected: z.boolean(),
   analysis: z.string().describe('Why this usage is or is not affected by the breaking change'),
-  suggestedFix: z.string().optional().describe('If affected, the specific code change needed'),
+  suggestedFix: z.string().optional().describe('If affected, the corrected code snippet — code only, no prose'),
 });
 
 const classificationSchema = z.object({
@@ -35,15 +35,29 @@ async function findFilesImporting(
   repo: string,
   packageName: string,
 ): Promise<string[]> {
+  // Try code search first (fast, but index can lag after pushes)
   try {
     const octokit = await getInstallationOctokit();
     const { data } = await octokit.rest.search.code({
       q: `"${packageName}" repo:${owner}/${repo} language:typescript`,
       per_page: 20,
     });
-    return data.items
+    const paths = data.items
       .map((item) => item.path)
       .filter((p) => p.match(/\.(ts|tsx)$/) && !p.endsWith('.d.ts') && p !== 'package.json' && p !== 'package-lock.json');
+    if (paths.length > 0) return paths;
+  } catch {}
+
+  // Fallback: walk the git tree (always current, slower)
+  try {
+    const octokit = await getInstallationOctokit();
+    const { data: tree } = await octokit.rest.git.getTree({
+      owner, repo, tree_sha: 'HEAD', recursive: 'true',
+    });
+    return tree.tree
+      .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
+      .map((f) => f.path!)
+      .filter((p) => p.startsWith('src/'));
   } catch {
     return [];
   }
@@ -225,7 +239,7 @@ For each usage hit above, output a finding:
 - The type definition diff is concrete evidence of what actually changed in the API. If a function or class is removed in the diff, code that calls it IS affected. If the diff shows a signature change, check if the code uses the changed parameters.
 - If the compile check passed, type-level breakages are ruled out — focus on runtime behaviour changes only.
 - In analysis, be specific: name the breaking change, say what the code does, say why it is or isn't affected.
-- If affected, provide suggestedFix with the corrected code.
+- If affected, provide suggestedFix with ONLY the corrected code snippet (no English explanation, no "Remove X" instructions — just the replacement code).
 
 For the overall verdict:
 - "risky" if ANY usage is affected. Cite the file:line in the reason.

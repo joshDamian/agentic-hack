@@ -27,16 +27,40 @@ export function getTypeDiff(
   }
 }
 
+export function resolveTypesVersion(typesPackage: string, packageMajor: string): string | null {
+  const tryRange = (range: string): string | null => {
+    try {
+      const out = execFileSync(
+        'npm', ['view', `${typesPackage}@${range}`, 'version', '--json'],
+        { encoding: 'utf-8', timeout: 10_000 },
+      ).trim();
+      const parsed = JSON.parse(out);
+      if (Array.isArray(parsed)) return parsed[parsed.length - 1] || null;
+      return typeof parsed === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  return tryRange(packageMajor) || (parseInt(packageMajor) > 0 ? tryRange('0') : null);
+}
+
 export function getTypesDiff(
   packageName: string,
   oldVersion: string,
   newVersion: string,
 ): TypeDiffResult {
   const typesPackage = `@types/${packageName.replace('@', '').replace('/', '__')}`;
+  const oldMajor = oldVersion.split('.')[0];
+  const newMajor = newVersion.split('.')[0];
+  const oldTypesVer = resolveTypesVersion(typesPackage, oldMajor);
+  const newTypesVer = resolveTypesVersion(typesPackage, newMajor);
+  if (!oldTypesVer || !newTypesVer || oldTypesVer === newTypesVer) {
+    return { diff: '', hasDtsChanges: false };
+  }
   try {
     const diff = execFileSync(
       'npm',
-      ['diff', `--diff=${typesPackage}@${oldVersion}`, `--diff=${typesPackage}@${newVersion}`, '--', '*.d.ts'],
+      ['diff', `--diff=${typesPackage}@${oldTypesVer}`, `--diff=${typesPackage}@${newTypesVer}`, '--', '*.d.ts'],
       { encoding: 'utf-8', timeout: 30_000, maxBuffer: 1024 * 1024 },
     );
     return { diff: diff.trim(), hasDtsChanges: diff.trim().length > 0 };

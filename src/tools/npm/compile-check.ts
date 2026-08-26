@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { resolveTypesVersion } from './typediff.js';
 
 export interface CompileError {
   file: string;
@@ -42,12 +43,14 @@ export async function compileCheck(
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'depbot-cc-'));
 
   try {
+    const deps: Record<string, string> = { [packageName]: newVersion, '@types/node': '*' };
+    const typesPackage = `@types/${packageName.replace('@', '').replace('/', '__')}`;
+    const major = newVersion.split('.')[0];
+    const typesVer = resolveTypesVersion(typesPackage, major);
+    if (typesVer) deps[typesPackage] = typesVer;
     fs.writeFileSync(
       path.join(tmpDir, 'package.json'),
-      JSON.stringify({
-        name: 'compile-check', private: true,
-        dependencies: { [packageName]: newVersion, '@types/node': '*' },
-      }),
+      JSON.stringify({ name: 'compile-check', private: true, dependencies: deps }),
     );
     fs.writeFileSync(path.join(tmpDir, 'tsconfig.json'), JSON.stringify(TSCONFIG));
 
@@ -101,7 +104,8 @@ function parseTscErrors(
     if (isNoiseError(message, packageName)) continue;
 
     const originalPath = [...sourceFiles.keys()].find((f) => path.basename(f) === basename) ?? file;
-    errors.push({ file: originalPath, line: parseInt(lineStr, 10), message });
+    const cleanMessage = message.replace(/["']\/[^"']*\/node_modules\//g, '"');
+    errors.push({ file: originalPath, line: parseInt(lineStr, 10), message: cleanMessage });
   }
 
   return errors;
