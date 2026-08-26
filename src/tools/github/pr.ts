@@ -1,5 +1,23 @@
-import { getInstallationOctokit } from './client.js';
+import { getInstallationOctokit, getFileContent } from './client.js';
+import { commentOnPR } from './ci.js';
 import type { PlannedBump } from '../../shared/types.js';
+
+const TODO_PREFIX = '// TODO(depbot-triage):';
+
+const EXT_LANG: Record<string, string> = {
+  '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
+  '.ts': 'typescript', '.tsx': 'typescript', '.mts': 'typescript',
+  '.py': 'python', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
+  '.java': 'java', '.kt': 'kotlin', '.cs': 'csharp', '.php': 'php',
+  '.swift': 'swift', '.sh': 'bash', '.yml': 'yaml', '.yaml': 'yaml',
+  '.json': 'json', '.css': 'css', '.html': 'html', '.sql': 'sql',
+};
+
+function langFromPath(filePath: string): string {
+  const dot = filePath.lastIndexOf('.');
+  if (dot === -1) return '';
+  return EXT_LANG[filePath.slice(dot)] ?? '';
+}
 
 export async function getDefaultBranch(owner: string, repo: string): Promise<string> {
   const octokit = await getInstallationOctokit();
@@ -43,11 +61,53 @@ export async function createBranchAndPR(
   pkgJson[depKey][bump.packageName] = `^${bump.targetVersion}`;
   const updatedContent = JSON.stringify(pkgJson, null, 2) + '\n';
 
-  const { data: blob } = await octokit.rest.git.createBlob({
+  const treeEntries: Array<{ path: string; mode: '100644'; type: 'blob'; sha: string }> = [];
+
+  const { data: pkgBlob } = await octokit.rest.git.createBlob({
     owner, repo,
     content: Buffer.from(updatedContent).toString('base64'),
     encoding: 'base64',
   });
+  treeEntries.push({ path: 'package.json', mode: '100644', type: 'blob', sha: pkgBlob.sha });
+
+  const affected = bump.findings?.filter((f) => f.isAffected) ?? [];
+  if (affected.length > 0) {
+    const byFile = new Map<string, Map<number, { line: number; api: string; analysis: string }>>();
+    for (const f of affected) {
+      if (!byFile.has(f.file)) byFile.set(f.file, new Map());
+      const fileMap = byFile.get(f.file)!;
+      if (!fileMap.has(f.line)) {
+        fileMap.set(f.line, { line: f.line, api: f.file, analysis: f.analysis });
+      }
+    }
+
+    for (const [filePath, findingsMap] of byFile) {
+      try {
+        const content = await getFileContent(owner, repo, filePath);
+        const lines = content.split('\n');
+
+        const sorted = [...findingsMap.values()].sort((a, b) => b.line - a.line);
+        for (const f of sorted) {
+          const idx = f.line - 1;
+          if (idx >= 0 && idx < lines.length) {
+            const indent = lines[idx].match(/^(\s*)/)?.[1] ?? '';
+            const todoComment = `${indent}${TODO_PREFIX} ${bump.packageName} ${bump.currentVersion} → ${bump.targetVersion} — review usage below`;
+            lines.splice(idx, 0, todoComment);
+          }
+        }
+
+        const modified = lines.join('\n');
+        const { data: fileBlob } = await octokit.rest.git.createBlob({
+          owner, repo,
+          content: Buffer.from(modified).toString('base64'),
+          encoding: 'base64',
+        });
+        treeEntries.push({ path: filePath, mode: '100644', type: 'blob', sha: fileBlob.sha });
+      } catch {
+        // If we can't read/modify the file, skip the TODO — the PR still works
+      }
+    }
+  }
 
   const { data: baseTree } = await octokit.rest.git.getCommit({
     owner, repo, commit_sha: headSha,
@@ -56,12 +116,7 @@ export async function createBranchAndPR(
   const { data: tree } = await octokit.rest.git.createTree({
     owner, repo,
     base_tree: baseTree.tree.sha,
-    tree: [{
-      path: 'package.json',
-      mode: '100644',
-      type: 'blob',
-      sha: blob.sha,
-    }],
+    tree: treeEntries,
   });
 
   const { data: commit } = await octokit.rest.git.createCommit({
@@ -130,9 +185,18 @@ ${bump.verdictReason ?? 'Analysis pending'}
   return body;
 }
 
-export function buildAnalysisComment(bump: PlannedBump): string | null {
+export interface AnalysisOutput {
+  reviewBody: string | null;
+  inlineComments: Array<{ path: string; line: number; body: string }>;
+}
+
+export function buildAnalysisOutput(
+  bump: PlannedBump,
+  owner: string,
+  repo: string,
+): AnalysisOutput {
   const findings = bump.findings;
-  if (!findings?.length) return null;
+  if (!findings?.length) return { reviewBody: null, inlineComments: [] };
 
   const affected = findings.filter((f) => f.isAffected);
   const falsePositives = findings.filter((f) => !f.isAffected);
@@ -141,33 +205,94 @@ export function buildAnalysisComment(bump: PlannedBump): string | null {
   let body = `## ${verdictEmoji} Safety Analysis — \`${bump.packageName}\` ${bump.currentVersion} → ${bump.targetVersion}\n\n`;
 
   if (bump.breakingChanges?.length) {
-    body += '### Breaking changes in this upgrade\n\n';
+    body += '### Breaking changes\n\n';
     for (const bc of bump.breakingChanges) {
       body += `- **${bc.kind}**: \`${bc.api}\` — ${bc.description}\n`;
-      if (bc.migrationHint) body += `  - *Migration:* ${bc.migrationHint}\n`;
     }
     body += '\n';
   }
 
   if (affected.length > 0) {
-    body += '### ⚠️ Affected code\n\n';
-    for (const f of affected) {
-      body += `#### \`${f.file}:${f.line}\`\n\n`;
-      body += `${f.analysis}\n\n`;
-      if (f.suggestedFix) {
-        body += `**Suggested fix:**\n\`\`\`\n${f.suggestedFix}\n\`\`\`\n\n`;
-      }
-    }
+    body += `### ⚠️ ${affected.length} affected location${affected.length > 1 ? 's' : ''}\n\n`;
+    body += 'See inline review comments below for details.\n\n';
   }
 
   if (falsePositives.length > 0) {
     body += '<details><summary>Checked but not affected (' + falsePositives.length + ')</summary>\n\n';
     for (const f of falsePositives) {
-      body += `- \`${f.file}:${f.line}\` — ${f.analysis}\n`;
+      body += `- [\`${f.file}:${f.line}\`](https://github.com/${owner}/${repo}/blob/HEAD/${f.file}#L${f.line}) — ${f.analysis}\n`;
     }
     body += '\n</details>\n';
   }
 
   body += '\n---\n*Analysis by [depbot-triage](https://github.com/joshDamian/agentic-hack)*';
-  return body;
+
+  const deduped = new Map<string, typeof affected[number]>();
+  for (const f of affected) {
+    const key = `${f.file}:${f.line}`;
+    if (!deduped.has(key)) deduped.set(key, f);
+  }
+
+  const inlineComments = [...deduped.values()].map((f) => {
+    const lang = langFromPath(f.file);
+    let comment = `**⚠️ Breaking change in \`${bump.packageName}\` ${bump.currentVersion} → ${bump.targetVersion}**\n\n`;
+    comment += `${f.analysis}\n`;
+    if (f.suggestedFix) {
+      comment += `\n**Suggested fix:**\n\`\`\`${lang}\n${f.suggestedFix}\n\`\`\`\n`;
+    }
+    return { path: f.file, line: f.line, body: comment };
+  });
+
+  return { reviewBody: body, inlineComments };
+}
+
+export async function postAnalysisReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  bump: PlannedBump,
+): Promise<void> {
+  const { reviewBody, inlineComments } = buildAnalysisOutput(bump, owner, repo);
+  if (!reviewBody) return;
+
+  if (inlineComments.length === 0) {
+    await commentOnPR(owner, repo, prNumber, reviewBody);
+    return;
+  }
+
+  const octokit = await getInstallationOctokit();
+  const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+  const { data: files } = await octokit.rest.pulls.listFiles({ owner, repo, pull_number: prNumber });
+
+  const comments: Array<{ path: string; position: number; body: string }> = [];
+
+  for (const c of inlineComments) {
+    const diffFile = files.find((f) => f.filename === c.path);
+    if (!diffFile?.patch) continue;
+
+    let position = 0;
+    for (const line of diffFile.patch.split('\n')) {
+      if (line.startsWith('@@')) {
+        position = 0;
+        continue;
+      }
+      position++;
+      if (line.startsWith('+') && line.includes(TODO_PREFIX)) {
+        comments.push({ path: c.path, position, body: c.body });
+        break;
+      }
+    }
+  }
+
+  if (comments.length > 0) {
+    await octokit.rest.pulls.createReview({
+      owner, repo, pull_number: prNumber,
+      commit_id: pr.head.sha,
+      event: 'COMMENT',
+      body: reviewBody,
+      comments,
+    });
+  } else {
+    await commentOnPR(owner, repo, prNumber, reviewBody);
+  }
 }

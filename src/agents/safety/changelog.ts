@@ -8,7 +8,7 @@ import { withRetry } from '../../shared/retry.js';
 export const breakingChangeSchema = z.object({
   hasBreakingChanges: z.boolean(),
   changes: z.array(z.object({
-    api: z.string().describe('The removed, renamed, or changed function/method/option name'),
+    api: z.string().describe('The identifier that changed — a method, class, option, or export name (e.g. "CancelToken", "process", "Extract"). Use the bare name, not a full call expression or prose description.'),
     kind: z.enum(['removed', 'renamed', 'signature-changed', 'behavior-changed', 'other']),
     description: z.string().describe('One-line summary of what changed'),
     migrationHint: z.string().optional().describe('What to use instead, if mentioned'),

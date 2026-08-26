@@ -2,7 +2,7 @@ import { z } from 'genkit';
 import { ai } from './genkit.js';
 import { getCampaign, updateCampaign } from './tools/firestore/client.js';
 import { classifyBump } from './agents/safety/index.js';
-import { buildAnalysisComment } from './tools/github/pr.js';
+import { postAnalysisReview } from './tools/github/pr.js';
 import { commentOnPR } from './tools/github/ci.js';
 
 export const reanalyseFlow = ai.defineFlow(
@@ -39,7 +39,6 @@ export const reanalyseFlow = ai.defineFlow(
     await updateCampaign(campaignId, { plan: campaign.plan });
 
     if (bump.prNumber) {
-      const comment = buildAnalysisComment(bump);
       const header = previousVerdict !== result.verdict
         ? `🔄 **Re-analysis** — verdict changed: ${previousVerdict} → **${result.verdict}**\n\n`
         : `🔄 **Re-analysis** — verdict unchanged: **${result.verdict}**\n\n`;
@@ -48,7 +47,13 @@ export const reanalyseFlow = ai.defineFlow(
         campaign.repoOwner,
         campaign.repoName,
         bump.prNumber,
-        header + (comment ?? result.reason),
+        header + result.reason,
+      );
+      await postAnalysisReview(
+        campaign.repoOwner,
+        campaign.repoName,
+        bump.prNumber,
+        bump,
       );
     }
 

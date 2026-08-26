@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { classifyBump } from './agents/safety/index.js';
-import { buildAnalysisComment } from './tools/github/pr.js';
+import { buildAnalysisOutput } from './tools/github/pr.js';
 import type { PlannedBump } from './shared/types.js';
 
 const bump: PlannedBump = {
@@ -39,10 +39,14 @@ bump.verdictReason = result.reason;
 bump.breakingChanges = result.breakingChanges;
 bump.findings = result.findings;
 
-const comment = buildAnalysisComment(bump);
-if (comment) {
-  console.log('\n=== Analysis Comment ===\n');
-  console.log(comment);
+const { reviewBody, inlineComments } = buildAnalysisOutput(bump, owner, repo);
+if (reviewBody) {
+  console.log('\n=== Review Body ===\n');
+  console.log(reviewBody);
+  if (inlineComments.length > 0) {
+    console.log('\n=== Inline Comments ===\n');
+    for (const c of inlineComments) console.log(c.body);
+  }
 } else {
-  console.log('\n(No analysis comment — no findings)');
+  console.log('\n(No analysis output — no findings)');
 }

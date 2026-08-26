@@ -56,7 +56,7 @@ export async function classifyBump(
     return { verdict: 'safe', reason: 'No breaking changes in release notes.', breakingChanges: [], findings: [] };
   }
 
-  const usageHits = await scanForUsage(owner, repo, breakingChanges);
+  const usageHits = await scanForUsage(owner, repo, breakingChanges, bump.packageName);
 
   if (usageHits.length === 0) {
     return {

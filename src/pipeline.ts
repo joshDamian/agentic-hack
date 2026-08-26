@@ -5,7 +5,7 @@ import { planBumps } from './agents/prioritiser/plan.js';
 import { createCampaign, updateCampaign } from './tools/firestore/client.js';
 import { classifyBump } from './agents/safety/index.js';
 import { clearFileCache } from './agents/safety/usage.js';
-import { createBranchAndPR, buildAnalysisComment } from './tools/github/pr.js';
+import { createBranchAndPR, postAnalysisReview } from './tools/github/pr.js';
 import { getPRCIStatus, commentOnPR } from './tools/github/ci.js';
 import type { Campaign } from './shared/types.js';
 import { runWithConcurrency } from './shared/concurrency.js';
@@ -87,10 +87,7 @@ export const pipelineFlow = ai.defineFlow(
         bump.ciStatus = 'pending';
         prsOpened++;
 
-        const analysisComment = buildAnalysisComment(bump);
-        if (analysisComment) {
-          await commentOnPR(owner, repo, result.prNumber, analysisComment);
-        }
+        await postAnalysisReview(owner, repo, result.prNumber, bump);
       } catch (err) {
         console.log(`  Failed: ${err instanceof Error ? err.message : err}`);
       }
