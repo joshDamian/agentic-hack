@@ -46,13 +46,28 @@ export async function fetchReleaseNotes(
     });
     const selected = important.length > 0 ? important : relevant.slice(-10);
 
-    let notes = selected
-      .map((r) => `## ${r.tagName}\n\n${r.body}`)
-      .join('\n\n---\n\n');
-
     const fromMajor = semver.coerce(fromVersion)?.major;
     const toMajor = semver.coerce(toVersion)?.major;
     const isMajorJump = fromMajor !== undefined && toMajor !== undefined && toMajor > fromMajor;
+
+    const majorReleases = isMajorJump
+      ? selected.filter((r) => {
+          const v = semver.coerce(r.tagName);
+          return v && v.minor === 0 && v.patch === 0;
+        })
+      : [];
+
+    let breakingSummary = '';
+    for (const r of majorReleases) {
+      const sections = extractBreakingSections(r.body);
+      if (sections) {
+        breakingSummary += `## BREAKING CHANGES IN ${r.tagName}\n\n${sections}\n\n---\n\n`;
+      }
+    }
+
+    let notes = breakingSummary + selected
+      .map((r) => `## ${r.tagName}\n\n${r.body}`)
+      .join('\n\n---\n\n');
     const hasMajorRelease = selected.some((r) => {
       const v = semver.coerce(r.tagName);
       return v && v.major > fromMajor! && v.minor === 0 && v.patch === 0;
@@ -73,6 +88,28 @@ export async function fetchReleaseNotes(
   if (changelog) return changelog;
 
   return `No release notes found for ${owner}/${repo} between ${fromVersion} and ${toVersion}`;
+}
+
+function extractBreakingSections(body: string): string | null {
+  const lines = body.split('\n');
+  const sections: string[] = [];
+  let capturing = false;
+
+  for (const line of lines) {
+    const isHeading = /^##\s/.test(line);
+    if (isHeading) {
+      if (/breaking|deprecat|removed|migration|api\s*change/i.test(line)) {
+        capturing = true;
+        sections.push(line);
+      } else {
+        capturing = false;
+      }
+    } else if (capturing) {
+      sections.push(line);
+    }
+  }
+
+  return sections.length > 0 ? sections.join('\n').trim() : null;
 }
 
 async function fetchChangelogFile(owner: string, repo: string): Promise<string | null> {
