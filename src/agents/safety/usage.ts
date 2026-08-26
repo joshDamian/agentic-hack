@@ -9,6 +9,31 @@ export interface UsageHit {
   context: string;
 }
 
+const fileCache = new Map<string, string>();
+
+let lastSearchTime = 0;
+async function rateLimitedSearch(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - lastSearchTime;
+  if (elapsed < 6500) {
+    await new Promise((r) => setTimeout(r, 6500 - elapsed));
+  }
+  lastSearchTime = Date.now();
+}
+
+export function clearFileCache(): void {
+  fileCache.clear();
+}
+
+async function getCachedFileContent(owner: string, repo: string, path: string): Promise<string> {
+  const key = `${owner}/${repo}/${path}`;
+  const cached = fileCache.get(key);
+  if (cached !== undefined) return cached;
+  const content = await getFileContent(owner, repo, path);
+  fileCache.set(key, content);
+  return content;
+}
+
 function extractSearchTerms(api: string): string[] {
   // "jwt.sign / jwt.verify" → ["jwt.sign", "jwt.verify"]
   // "AxiosError" → ["AxiosError"]
@@ -34,8 +59,7 @@ export async function scanForUsage(
 
     for (const term of terms) {
       try {
-        // GitHub code search: 10 requests/min for authenticated users
-        await new Promise((r) => setTimeout(r, 6500));
+        await rateLimitedSearch();
         const { data } = await octokit.rest.search.code({
           q: `${term} repo:${owner}/${repo}`,
           per_page: 10,
@@ -48,7 +72,7 @@ export async function scanForUsage(
           if (seenFiles.has(cacheKey)) continue;
           seenFiles.add(cacheKey);
 
-          const content = await getFileContent(owner, repo, item.path);
+          const content = await getCachedFileContent(owner, repo, item.path);
           const lines = content.split('\n');
           for (let i = 0; i < lines.length; i++) {
             if (lines[i].includes(term)) {

@@ -4,9 +4,11 @@ import { listAlerts, getFileContent } from './tools/github/client.js';
 import { planBumps } from './agents/prioritiser/plan.js';
 import { createCampaign, updateCampaign } from './tools/firestore/client.js';
 import { classifyBump } from './agents/safety/index.js';
+import { clearFileCache } from './agents/safety/usage.js';
 import { createBranchAndPR, buildAnalysisComment } from './tools/github/pr.js';
 import { getPRCIStatus, commentOnPR } from './tools/github/ci.js';
 import type { Campaign } from './shared/types.js';
+import { runWithConcurrency } from './shared/concurrency.js';
 
 export const pipelineFlow = ai.defineFlow(
   {
@@ -29,9 +31,13 @@ export const pipelineFlow = ai.defineFlow(
     // 1. Prioritise
     console.log('=== Prioritiser ===');
     const alerts = await listAlerts(owner, repo);
-    const lockRaw = await getFileContent(owner, repo, 'package-lock.json');
+    const [lockRaw, pkgRaw] = await Promise.all([
+      getFileContent(owner, repo, 'package-lock.json'),
+      getFileContent(owner, repo, 'package.json'),
+    ]);
     const packageLock = JSON.parse(lockRaw) as { packages: Record<string, { version: string }> };
-    const bumps = planBumps(alerts, packageLock);
+    const packageJson = JSON.parse(pkgRaw) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const bumps = planBumps(alerts, packageLock, packageJson);
 
     const campaignId = `${owner}-${repo}-${Date.now()}`;
     const campaign: Campaign = {
@@ -47,16 +53,17 @@ export const pipelineFlow = ai.defineFlow(
     console.log(`Campaign ${campaignId}: ${bumps.length} bumps for ${alerts.length} alerts`);
 
     // 2. Safety Analyser
+    clearFileCache();
     console.log('=== Safety Analyser ===');
     await updateCampaign(campaignId, { status: 'analysing' });
-    for (const bump of bumps) {
+    await runWithConcurrency(bumps, 3, async (bump) => {
       console.log(`  Analysing ${bump.packageName}...`);
       const result = await classifyBump(owner, repo, bump);
       bump.verdict = result.verdict;
       bump.verdictReason = result.reason;
       bump.breakingChanges = result.breakingChanges;
       bump.findings = result.findings;
-    }
+    });
     await updateCampaign(campaignId, { plan: bumps });
 
     // 3. Executor

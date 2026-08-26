@@ -8,10 +8,19 @@ interface PackageLock {
 export function planBumps(
   alerts: DependabotAlert[],
   packageLock: PackageLock,
+  packageJson?: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> },
 ): PlannedBump[] {
+  const directDeps = packageJson
+    ? new Set([
+        ...Object.keys(packageJson.dependencies ?? {}),
+        ...Object.keys(packageJson.devDependencies ?? {}),
+      ])
+    : null;
+
   const groups = new Map<string, DependabotAlert[]>();
   for (const a of alerts) {
     const name = a.dependency.package.name;
+    if (directDeps && !directDeps.has(name)) continue;
     if (!groups.has(name)) groups.set(name, []);
     groups.get(name)!.push(a);
   }
