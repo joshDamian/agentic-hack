@@ -32,9 +32,13 @@ export async function classifyBump(
   bump: PlannedBump,
 ): Promise<ClassificationResult> {
   const breakingChanges = await extractBreakingChanges(bump);
-  const bcData = breakingChanges.changes.map((c) => ({
-    api: c.api, kind: c.kind, description: c.description, migrationHint: c.migrationHint,
-  }));
+  const bcData = breakingChanges.changes.map((c) => {
+    const entry: { api: string; kind: string; description: string; migrationHint?: string } = {
+      api: c.api, kind: c.kind, description: c.description,
+    };
+    if (c.migrationHint) entry.migrationHint = c.migrationHint;
+    return entry;
+  });
 
   if (!breakingChanges.hasBreakingChanges) {
     return { verdict: 'safe', reason: 'No breaking changes in release notes.', breakingChanges: [], findings: [] };
@@ -92,7 +96,13 @@ In the reason field, structure as: what changed → what the codebase uses → w
     verdict: output!.verdict,
     reason: output!.reason,
     breakingChanges: bcData,
-    findings: output!.findings,
+    findings: output!.findings.map((f) => {
+      const entry: { file: string; line: number; isAffected: boolean; analysis: string; suggestedFix?: string } = {
+        file: f.file, line: f.line, isAffected: f.isAffected, analysis: f.analysis,
+      };
+      if (f.suggestedFix) entry.suggestedFix = f.suggestedFix;
+      return entry;
+    }),
   };
 }
 

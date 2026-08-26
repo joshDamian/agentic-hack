@@ -42,6 +42,11 @@ export const executorFlow = ai.defineFlow(
         continue;
       }
 
+      if (bump.prNumber) {
+        skipped.push({ packageName: bump.packageName, reason: `PR #${bump.prNumber} already exists` });
+        continue;
+      }
+
       if (dryRun) {
         console.log(`[DRY RUN] would open PR for ${bump.packageName} ${bump.currentVersion} → ${bump.targetVersion} (${bump.verdict})`);
         prsOpened.push({

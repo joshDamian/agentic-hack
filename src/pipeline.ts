@@ -64,6 +64,10 @@ export const pipelineFlow = ai.defineFlow(
     await updateCampaign(campaignId, { status: 'executing' });
     let prsOpened = 0;
     for (const bump of bumps) {
+      if (bump.prNumber) {
+        console.log(`  Skipping ${bump.packageName}: PR #${bump.prNumber} already exists`);
+        continue;
+      }
       if (dryRun) {
         console.log(`  [DRY RUN] ${bump.packageName}: ${bump.verdict}`);
         continue;

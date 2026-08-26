@@ -24,6 +24,13 @@ export async function createBranchAndPR(
 
   const branchName = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
 
+  try {
+    await octokit.rest.git.getRef({ owner, repo, ref: `heads/${branchName}` });
+    throw new Error(`Branch ${branchName} already exists`);
+  } catch (err: any) {
+    if (err.status !== 404) throw err;
+  }
+
   const { data: pkgFile } = await octokit.rest.repos.getContent({
     owner, repo, path: 'package.json', ref: defaultBranch,
   });
