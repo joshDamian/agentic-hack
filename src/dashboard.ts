@@ -381,7 +381,24 @@ async function triggerRun() {
       body: JSON.stringify({ owner: '${repo.owner}', repo: '${repo.name}' })
     });
   } catch (e) { console.error(e); }
-  setTimeout(function() { location.reload(); }, 2500);
+  pollUntilActive();
+}
+
+function pollUntilActive() {
+  var attempts = 0;
+  var poll = setInterval(async function() {
+    attempts++;
+    try {
+      var res = await fetch('/api/status?repo=${repo.owner}/${repo.name}');
+      var data = await res.json();
+      if (data.active || data.status === 'done' || data.status === 'failed' || attempts > 30) {
+        clearInterval(poll);
+        location.reload();
+      }
+    } catch (e) {
+      if (attempts > 30) { clearInterval(poll); location.reload(); }
+    }
+  }, 2000);
 }
 
 function switchRepo(value) {

@@ -37,8 +37,6 @@ export async function fetchReleaseNotes(
       return semver.compare(va, vb);
     });
 
-    // Prioritise major/minor releases and anything mentioning breaking changes.
-    // Include patches only if they mention breaking/deprecat, or we have few releases.
     const important = relevant.filter((r) => {
       const v = semver.coerce(r.tagName);
       if (!v) return false;
@@ -48,9 +46,26 @@ export async function fetchReleaseNotes(
     });
     const selected = important.length > 0 ? important : relevant.slice(-10);
 
-    const notes = selected
+    let notes = selected
       .map((r) => `## ${r.tagName}\n\n${r.body}`)
       .join('\n\n---\n\n');
+
+    const fromMajor = semver.coerce(fromVersion)?.major;
+    const toMajor = semver.coerce(toVersion)?.major;
+    const isMajorJump = fromMajor !== undefined && toMajor !== undefined && toMajor > fromMajor;
+    const hasMajorRelease = selected.some((r) => {
+      const v = semver.coerce(r.tagName);
+      return v && v.major > fromMajor! && v.minor === 0 && v.patch === 0;
+    });
+    const mentionsBreaking = /breaking|deprecat|removed|renamed/i.test(notes);
+
+    if (isMajorJump && (!hasMajorRelease || !mentionsBreaking)) {
+      const changelog = await fetchChangelogFile(owner, repo);
+      if (changelog) {
+        notes += '\n\n---\n\n## CHANGELOG.md (supplemental)\n\n' + changelog;
+      }
+    }
+
     return notes.slice(0, 30_000);
   }
 

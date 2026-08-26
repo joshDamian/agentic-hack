@@ -11,6 +11,7 @@ import { reanalyseFlow } from './reanalyse.js';
 import { dashboardHandler } from './dashboard.js';
 import { config } from './shared/config.js';
 import { listInstallationRepos } from './tools/github/client.js';
+import { listCampaigns } from './tools/firestore/client.js';
 
 const app = express();
 app.use(express.json());
@@ -44,6 +45,16 @@ app.get('/api/repos', async (_req, res) => {
     console.error('Failed to list repos:', err);
     res.status(500).json({ error: 'Failed to list repos' });
   }
+});
+
+app.get('/api/status', async (req, res) => {
+  const repoParam = req.query.repo as string | undefined;
+  const campaigns = await listCampaigns();
+  const match = repoParam
+    ? campaigns.find((c) => `${c.repoOwner}/${c.repoName}` === repoParam)
+    : campaigns[0];
+  const active = !!match && !['done', 'failed'].includes(match.status);
+  res.json({ active, status: match?.status ?? null });
 });
 
 app.post('/pipeline', expressHandler(pipelineFlow));
