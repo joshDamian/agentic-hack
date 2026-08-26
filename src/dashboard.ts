@@ -238,9 +238,11 @@ function renderBumpRow(c: Campaign, b: PlannedBump, i: number): string {
   else if (b.ciStatus === 'pending') ciCell = '<span class="ci wait">Pending</span>';
   else ciCell = '<span class="ci none">&mdash;</span>';
 
-  return `<div class="bump-row v-${verdict}" ${hasDetail ? 'onclick="toggle(this)"' : ''}>
+  const reanalyseBtn = `<button class="reanalyse-btn" onclick="event.stopPropagation(); reanalyse(this, '${esc(c.id)}', '${esc(b.packageName)}')" title="Re-run safety analysis">Re-analyse</button>`;
+
+  return `<div class="bump-row v-${verdict}" onclick="toggle(this)">
     <div class="bump-cols">
-      <span class="bump-arrow">${hasDetail ? '&#9654;' : ''}</span>
+      <span class="bump-arrow">&#9654;</span>
       <span class="bump-pkg">${esc(b.packageName)}</span>
       <span class="bump-ver">${esc(b.currentVersion)} &rarr; ${esc(b.targetVersion)}</span>
       <span class="bump-alerts">${b.alertsClosed}</span>
@@ -250,7 +252,10 @@ function renderBumpRow(c: Campaign, b: PlannedBump, i: number): string {
     </div>
   </div>
   <div class="bump-detail" id="d${i}">
-    ${hasDetail ? `<div class="detail-inner">${renderDetail(b)}</div>` : ''}
+    <div class="detail-inner">
+      ${hasDetail ? renderDetail(b) : ''}
+      <div class="detail-actions">${reanalyseBtn}</div>
+    </div>
   </div>`;
 }
 
@@ -399,6 +404,40 @@ function pollUntilActive() {
       if (attempts > 30) { clearInterval(poll); location.reload(); }
     }
   }, 2000);
+}
+
+async function reanalyse(btn, campaignId, packageName) {
+  btn.disabled = true;
+  btn.textContent = 'Re-analysing\\u2026';
+  try {
+    await fetch('/reanalyse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId: campaignId, packageName: packageName })
+    });
+    pollUntilReanalysis(campaignId, packageName, btn);
+  } catch (e) {
+    console.error(e);
+    btn.disabled = false;
+    btn.textContent = 'Re-analyse';
+  }
+}
+
+function pollUntilReanalysis(campaignId, packageName, btn) {
+  var attempts = 0;
+  var poll = setInterval(async function() {
+    attempts++;
+    try {
+      var res = await fetch('/api/status?repo=' + encodeURIComponent('${repo.owner}/${repo.name}'));
+      var data = await res.json();
+      if (!data.active || attempts > 60) {
+        clearInterval(poll);
+        location.reload();
+      }
+    } catch (e) {
+      if (attempts > 60) { clearInterval(poll); location.reload(); }
+    }
+  }, 3000);
 }
 
 function switchRepo(value) {
@@ -781,6 +820,16 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .fp-toggle:hover { color: var(--accent); }
 .fp-group { display: none; margin-top: 0.375rem; }
 .fp-group.open { display: block; }
+.detail-actions { display: flex; justify-content: flex-end; padding-top: 0.25rem; }
+.reanalyse-btn {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.3rem 0.75rem; background: transparent; color: var(--accent);
+  border: 1px solid var(--edge); border-radius: var(--radius-sm);
+  font-family: 'Source Sans 3', sans-serif; font-size: 0.75rem; font-weight: 600;
+  cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.reanalyse-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+.reanalyse-btn:disabled { opacity: 0.5; cursor: default; }
 .code-block {
   font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
   background: var(--surface); border: 1px solid var(--edge); border-radius: 3px;
