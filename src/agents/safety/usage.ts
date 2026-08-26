@@ -6,6 +6,7 @@ export interface UsageHit {
   file: string;
   line: number;
   snippet: string;
+  context: string;
 }
 
 function extractSearchTerms(api: string): string[] {
@@ -51,11 +52,19 @@ export async function scanForUsage(
           const lines = content.split('\n');
           for (let i = 0; i < lines.length; i++) {
             if (lines[i].includes(term)) {
+              const start = Math.max(0, i - 4);
+              const end = Math.min(lines.length, i + 5);
+              const contextLines = lines.slice(start, end).map((l, idx) => {
+                const lineNum = start + idx + 1;
+                const marker = lineNum === i + 1 ? '→' : ' ';
+                return `${marker} ${lineNum} | ${l}`;
+              });
               hits.push({
                 api: term,
                 file: item.path,
                 line: i + 1,
                 snippet: lines[i].trim(),
+                context: contextLines.join('\n'),
               });
             }
           }

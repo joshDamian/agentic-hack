@@ -3,54 +3,10 @@ import { ai } from './genkit.js';
 import { listAlerts, getFileContent } from './tools/github/client.js';
 import { planBumps } from './agents/prioritiser/plan.js';
 import { createCampaign, updateCampaign } from './tools/firestore/client.js';
-import { extractBreakingChanges } from './agents/safety/changelog.js';
-import { scanForUsage } from './agents/safety/usage.js';
-import { createBranchAndPR } from './tools/github/pr.js';
+import { classifyBump } from './agents/safety/index.js';
+import { createBranchAndPR, buildAnalysisComment } from './tools/github/pr.js';
 import { getPRCIStatus, commentOnPR } from './tools/github/ci.js';
-import type { BumpVerdict, Campaign, PlannedBump } from './shared/types.js';
-
-const verdictSchema = z.object({
-  verdict: z.enum(['safe', 'risky', 'unknown']),
-  reason: z.string(),
-});
-
-async function classifyBump(
-  owner: string,
-  repo: string,
-  bump: PlannedBump,
-): Promise<{ verdict: BumpVerdict; reason: string }> {
-  const breakingChanges = await extractBreakingChanges(bump);
-
-  if (!breakingChanges.hasBreakingChanges) {
-    return { verdict: 'safe', reason: 'No breaking changes in release notes' };
-  }
-
-  const usageHits = await scanForUsage(owner, repo, breakingChanges);
-
-  if (usageHits.length === 0) {
-    return { verdict: 'safe', reason: 'Breaking changes exist but none affect this codebase' };
-  }
-
-  const { output } = await ai.generate({
-    prompt: `You are a dependency upgrade safety classifier.
-
-Package: ${bump.packageName}
-Upgrade: ${bump.currentVersion} → ${bump.targetVersion}
-
-Breaking changes:
-${breakingChanges.changes.map((c) => `- ${c.kind}: ${c.api} — ${c.description}`).join('\n')}
-
-Usage hits in the codebase:
-${usageHits.map((h) => `- ${h.file}:${h.line}: ${h.snippet}`).join('\n')}
-
-If the usage hits actually use the broken APIs, verdict is "risky" and cite the specific file:line.
-If the usage hits are false positives (different context, comments, etc.), verdict is "safe".
-If you can't tell, verdict is "unknown".`,
-    output: { schema: verdictSchema },
-  });
-
-  return { verdict: output!.verdict, reason: output!.reason };
-}
+import type { Campaign } from './shared/types.js';
 
 export const pipelineFlow = ai.defineFlow(
   {
@@ -95,9 +51,11 @@ export const pipelineFlow = ai.defineFlow(
     await updateCampaign(campaignId, { status: 'analysing' });
     for (const bump of bumps) {
       console.log(`  Analysing ${bump.packageName}...`);
-      const { verdict, reason } = await classifyBump(owner, repo, bump);
-      bump.verdict = verdict;
-      bump.verdictReason = reason;
+      const result = await classifyBump(owner, repo, bump);
+      bump.verdict = result.verdict;
+      bump.verdictReason = result.reason;
+      bump.breakingChanges = result.breakingChanges;
+      bump.findings = result.findings;
     }
     await updateCampaign(campaignId, { plan: bumps });
 
@@ -117,6 +75,11 @@ export const pipelineFlow = ai.defineFlow(
         bump.prUrl = result.prUrl;
         bump.ciStatus = 'pending';
         prsOpened++;
+
+        const analysisComment = buildAnalysisComment(bump);
+        if (analysisComment) {
+          await commentOnPR(owner, repo, result.prNumber, analysisComment);
+        }
       } catch (err) {
         console.log(`  Failed: ${err instanceof Error ? err.message : err}`);
       }

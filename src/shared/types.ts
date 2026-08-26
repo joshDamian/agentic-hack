@@ -35,6 +35,19 @@ export interface PlannedBump {
   alertNumbers: number[];
   verdict?: BumpVerdict;
   verdictReason?: string;
+  breakingChanges?: Array<{
+    api: string;
+    kind: string;
+    description: string;
+    migrationHint?: string;
+  }>;
+  findings?: Array<{
+    file: string;
+    line: number;
+    isAffected: boolean;
+    analysis: string;
+    suggestedFix?: string;
+  }>;
   prNumber?: number;
   prUrl?: string;
   ciStatus?: 'pending' | 'success' | 'failure' | 'no-checks';

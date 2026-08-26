@@ -95,7 +95,7 @@ function findDepKey(
 function formatPRBody(bump: PlannedBump): string {
   const verdictEmoji = bump.verdict === 'safe' ? '✅' : bump.verdict === 'risky' ? '⚠️' : '❓';
 
-  return `## Dependency bump
+  let body = `## Dependency bump
 
 | | |
 |---|---|
@@ -108,11 +108,59 @@ function formatPRBody(bump: PlannedBump): string {
 ### Verdict reason
 
 ${bump.verdictReason ?? 'Analysis pending'}
+`;
 
-### Alerts closed
+  if (bump.breakingChanges?.length) {
+    body += '\n### Breaking changes\n\n';
+    for (const bc of bump.breakingChanges) {
+      body += `- **${bc.kind}**: \`${bc.api}\` — ${bc.description}\n`;
+      if (bc.migrationHint) body += `  - Migration: ${bc.migrationHint}\n`;
+    }
+  }
 
-${bump.alertNumbers.map((n) => `- #${n}`).join('\n')}
+  body += `\n### Alerts closed\n\n${bump.alertNumbers.map((n) => `- #${n}`).join('\n')}`;
+  body += '\n\n---\n*Opened by [depbot-triage](https://github.com/joshDamian/agentic-hack) — an autonomous Dependabot backlog agent.*';
+  return body;
+}
 
----
-*Opened by [depbot-triage](https://github.com/joshDamian/agentic-hack) — an autonomous Dependabot backlog agent.*`;
+export function buildAnalysisComment(bump: PlannedBump): string | null {
+  const findings = bump.findings;
+  if (!findings?.length) return null;
+
+  const affected = findings.filter((f) => f.isAffected);
+  const falsePositives = findings.filter((f) => !f.isAffected);
+  const verdictEmoji = bump.verdict === 'safe' ? '✅' : bump.verdict === 'risky' ? '⚠️' : '❓';
+
+  let body = `## ${verdictEmoji} Safety Analysis — \`${bump.packageName}\` ${bump.currentVersion} → ${bump.targetVersion}\n\n`;
+
+  if (bump.breakingChanges?.length) {
+    body += '### Breaking changes in this upgrade\n\n';
+    for (const bc of bump.breakingChanges) {
+      body += `- **${bc.kind}**: \`${bc.api}\` — ${bc.description}\n`;
+      if (bc.migrationHint) body += `  - *Migration:* ${bc.migrationHint}\n`;
+    }
+    body += '\n';
+  }
+
+  if (affected.length > 0) {
+    body += '### ⚠️ Affected code\n\n';
+    for (const f of affected) {
+      body += `#### \`${f.file}:${f.line}\`\n\n`;
+      body += `${f.analysis}\n\n`;
+      if (f.suggestedFix) {
+        body += `**Suggested fix:**\n\`\`\`\n${f.suggestedFix}\n\`\`\`\n\n`;
+      }
+    }
+  }
+
+  if (falsePositives.length > 0) {
+    body += '<details><summary>Checked but not affected (' + falsePositives.length + ')</summary>\n\n';
+    for (const f of falsePositives) {
+      body += `- \`${f.file}:${f.line}\` — ${f.analysis}\n`;
+    }
+    body += '\n</details>\n';
+  }
+
+  body += '\n---\n*Analysis by [depbot-triage](https://github.com/joshDamian/agentic-hack)*';
+  return body;
 }

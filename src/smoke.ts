@@ -1,34 +1,48 @@
 import 'dotenv/config';
-import { listAlerts, getFileContent } from './tools/github/client.js';
-import { planBumps } from './agents/prioritiser/plan.js';
-import { createCampaign, getCampaign, updateCampaign } from './tools/firestore/client.js';
-import { createBranchAndPR } from './tools/github/pr.js';
-import { getPRCIStatus } from './tools/github/ci.js';
-import { config } from './shared/config.js';
-import type { Campaign } from './shared/types.js';
+import { classifyBump } from './agents/safety/index.js';
+import { buildAnalysisComment } from './tools/github/pr.js';
+import type { PlannedBump } from './shared/types.js';
 
-async function main() {
-  const { owner, name: repo } = config.targetRepo;
+const bump: PlannedBump = {
+  packageName: 'jsonwebtoken',
+  ecosystem: 'npm',
+  currentVersion: '8.5.1',
+  targetVersion: '9.0.2',
+  alertsClosed: 2,
+  alertNumbers: [10, 11],
+};
 
-  console.log('Fetching alerts and planning bumps...');
-  const alerts = await listAlerts(owner, repo);
-  const lockRaw = await getFileContent(owner, repo, 'package-lock.json');
-  const packageLock = JSON.parse(lockRaw) as { packages: Record<string, { version: string }> };
-  const bumps = planBumps(alerts, packageLock);
+const owner = process.env.TARGET_REPO_OWNER!;
+const repo = process.env.TARGET_REPO_NAME!;
 
-  // Pick a small, safe bump to test
-  const testBump = bumps.find((b) => b.packageName === 'semver')!;
-  testBump.verdict = 'safe';
-  testBump.verdictReason = 'Patch version bump, no breaking changes';
+console.log(`Classifying ${bump.packageName} ${bump.currentVersion} → ${bump.targetVersion}`);
+console.log(`Repo: ${owner}/${repo}\n`);
 
-  console.log(`\nTest bump: ${testBump.packageName} ${testBump.currentVersion} → ${testBump.targetVersion}`);
-  console.log('Creating branch and PR...');
+const result = await classifyBump(owner, repo, bump);
 
-  const result = await createBranchAndPR(owner, repo, testBump);
-  console.log(`PR opened: ${result.prUrl}`);
-
-  console.log('Checking CI status...');
-  const ci = await getPRCIStatus(owner, repo, result.prNumber);
-  console.log(`CI: ${ci.status} — ${ci.details}`);
+console.log(`\nVerdict: ${result.verdict}`);
+console.log(`Reason: ${result.reason}`);
+console.log(`\nBreaking changes: ${result.breakingChanges?.length ?? 0}`);
+for (const bc of result.breakingChanges ?? []) {
+  console.log(`  - ${bc.kind}: ${bc.api} — ${bc.description}`);
 }
-main();
+console.log(`\nFindings: ${result.findings?.length ?? 0}`);
+for (const f of result.findings ?? []) {
+  console.log(`  ${f.isAffected ? '⚠️' : '✓'} ${f.file}:${f.line}`);
+  console.log(`    ${f.analysis}`);
+  if (f.suggestedFix) console.log(`    Fix: ${f.suggestedFix}`);
+}
+
+// Test the analysis comment builder
+bump.verdict = result.verdict;
+bump.verdictReason = result.reason;
+bump.breakingChanges = result.breakingChanges;
+bump.findings = result.findings;
+
+const comment = buildAnalysisComment(bump);
+if (comment) {
+  console.log('\n=== Analysis Comment ===\n');
+  console.log(comment);
+} else {
+  console.log('\n(No analysis comment — no findings)');
+}

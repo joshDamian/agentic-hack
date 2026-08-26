@@ -1,7 +1,8 @@
 import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { getCampaign, updateCampaign } from '../../tools/firestore/client.js';
-import { createBranchAndPR } from '../../tools/github/pr.js';
+import { createBranchAndPR, buildAnalysisComment } from '../../tools/github/pr.js';
+import { commentOnPR } from '../../tools/github/ci.js';
 
 const prResultSchema = z.object({
   packageName: z.string(),
@@ -62,6 +63,12 @@ export const executorFlow = ai.defineFlow(
         bump.prNumber = result.prNumber;
         bump.prUrl = result.prUrl;
         bump.ciStatus = 'pending';
+
+        const analysisComment = buildAnalysisComment(bump);
+        if (analysisComment) {
+          await commentOnPR(campaign.repoOwner, campaign.repoName, result.prNumber, analysisComment);
+        }
+
         prsOpened.push({
           packageName: bump.packageName,
           prNumber: result.prNumber,
