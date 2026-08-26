@@ -57,12 +57,18 @@ export const pipelineFlow = ai.defineFlow(
     console.log('=== Safety Analyser ===');
     await updateCampaign(campaignId, { status: 'analysing' });
     await runWithConcurrency(bumps, 3, async (bump) => {
-      console.log(`  Analysing ${bump.packageName}...`);
-      const result = await classifyBump(owner, repo, bump);
-      bump.verdict = result.verdict;
-      bump.verdictReason = result.reason;
-      bump.breakingChanges = result.breakingChanges;
-      bump.findings = result.findings;
+      try {
+        console.log(`  Analysing ${bump.packageName}...`);
+        const result = await classifyBump(owner, repo, bump);
+        bump.verdict = result.verdict;
+        bump.verdictReason = result.reason;
+        bump.breakingChanges = result.breakingChanges;
+        bump.findings = result.findings;
+      } catch (err) {
+        console.log(`  Analysis failed for ${bump.packageName}: ${err instanceof Error ? err.message : err}`);
+        bump.verdict = 'unknown';
+        bump.verdictReason = 'Analysis failed — will retry on next run';
+      }
     });
     await updateCampaign(campaignId, { plan: bumps });
 
