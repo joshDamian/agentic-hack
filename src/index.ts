@@ -11,7 +11,7 @@ import { reanalyseFlow } from './reanalyse.js';
 import { dashboardHandler } from './dashboard.js';
 import { config } from './shared/config.js';
 import { listInstallationRepos } from './tools/github/client.js';
-import { listCampaigns } from './tools/firestore/client.js';
+import { listCampaigns, getCampaign } from './tools/firestore/client.js';
 
 const app = express();
 app.use(express.json());
@@ -55,6 +55,19 @@ app.get('/api/status', async (req, res) => {
     : campaigns[0];
   const active = !!match && !['done', 'failed'].includes(match.status);
   res.json({ active, status: match?.status ?? null });
+});
+
+app.get('/api/bump', async (req, res) => {
+  const { campaignId, package: pkg } = req.query as { campaignId?: string; package?: string };
+  if (!campaignId || !pkg) {
+    res.status(400).json({ error: 'campaignId and package are required' });
+    return;
+  }
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) { res.status(404).json({ error: 'Campaign not found' }); return; }
+  const bump = campaign.plan.find((b) => b.packageName === pkg);
+  if (!bump) { res.status(404).json({ error: 'Package not in campaign' }); return; }
+  res.json({ verdict: bump.verdict ?? null, updatedAt: campaign.updatedAt });
 });
 
 app.post('/pipeline', expressHandler(pipelineFlow));

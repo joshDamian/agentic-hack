@@ -241,7 +241,7 @@ function renderBumpRow(c: Campaign, b: PlannedBump, i: number): string {
 
   const reanalyseBtn = `<button class="reanalyse-btn" onclick="event.stopPropagation(); reanalyse(this, '${esc(c.id)}', '${esc(b.packageName)}')" title="Re-run safety analysis">Re-analyse</button>`;
 
-  return `<div class="bump-row v-${verdict}" onclick="toggle(this)">
+  return `<div class="bump-row v-${verdict}" data-pkg="${esc(b.packageName)}" onclick="toggle(this)">
     <div class="bump-cols">
       <span class="bump-arrow">&#9654;</span>
       <span class="bump-pkg">${esc(b.packageName)}</span>
@@ -409,36 +409,42 @@ function pollUntilActive() {
 
 async function reanalyse(btn, campaignId, packageName) {
   btn.disabled = true;
-  btn.textContent = 'Re-analysing\\u2026';
+  btn.innerHTML = '<span class="spinner"></span> Re-analysing\\u2026';
+  location.hash = 'pkg-' + packageName;
+
+  var row = btn.closest('.detail-inner').parentElement.previousElementSibling;
+  var verdictEl = row.querySelector('.verdict');
+  var oldVerdict = verdictEl ? verdictEl.textContent.trim() : '';
+
   try {
+    var snap = await fetch('/api/bump?campaignId=' + encodeURIComponent(campaignId) + '&package=' + encodeURIComponent(packageName));
+    var before = await snap.json();
+
     await fetch('/reanalyse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ campaignId: campaignId, packageName: packageName })
     });
-    pollUntilReanalysis(campaignId, packageName, btn);
+
+    var attempts = 0;
+    var poll = setInterval(async function() {
+      attempts++;
+      try {
+        var res = await fetch('/api/bump?campaignId=' + encodeURIComponent(campaignId) + '&package=' + encodeURIComponent(packageName));
+        var data = await res.json();
+        if (data.updatedAt !== before.updatedAt || attempts > 90) {
+          clearInterval(poll);
+          location.reload();
+        }
+      } catch (e) {
+        if (attempts > 90) { clearInterval(poll); location.reload(); }
+      }
+    }, 3000);
   } catch (e) {
     console.error(e);
     btn.disabled = false;
     btn.textContent = 'Re-analyse';
   }
-}
-
-function pollUntilReanalysis(campaignId, packageName, btn) {
-  var attempts = 0;
-  var poll = setInterval(async function() {
-    attempts++;
-    try {
-      var res = await fetch('/api/status?repo=' + encodeURIComponent('${repo.owner}/${repo.name}'));
-      var data = await res.json();
-      if (!data.active || attempts > 60) {
-        clearInterval(poll);
-        location.reload();
-      }
-    } catch (e) {
-      if (attempts > 60) { clearInterval(poll); location.reload(); }
-    }
-  }, 3000);
 }
 
 function switchRepo(value) {
@@ -479,6 +485,21 @@ function updateCountdown() {
 updateCountdown();
 setInterval(updateCountdown, 60000);
 ${active ? '\nsetTimeout(function() { location.reload(); }, 5000);' : ''}
+
+(function openFromHash() {
+  var hash = location.hash;
+  if (!hash || !hash.startsWith('#pkg-')) return;
+  var pkg = decodeURIComponent(hash.slice(5));
+  var rows = document.querySelectorAll('.bump-row[data-pkg]');
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].getAttribute('data-pkg') === pkg) {
+      rows[i].classList.add('open');
+      rows[i].nextElementSibling.classList.add('open');
+      rows[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      break;
+    }
+  }
+})();
 `;
 }
 
