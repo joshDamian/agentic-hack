@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import { listCampaigns } from './tools/firestore/client.js';
 import { config } from './shared/config.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
+import { dedent } from './shared/text.js';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -309,7 +310,7 @@ function renderDetail(b: PlannedBump): string {
       html += `<div class="finding affected">
         <div class="finding-loc">${esc(f.file)}:${f.line}</div>
         <p>${esc(f.analysis)}</p>
-        ${f.suggestedFix ? `<pre class="code-block">${highlightCode(f.suggestedFix, f.file)}</pre>` : ''}
+        ${f.suggestedFix ? `<pre class="code-block">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}
       </div>`;
     }
     if (ok.length > 0) {

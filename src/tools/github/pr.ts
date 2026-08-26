@@ -1,6 +1,7 @@
 import { getInstallationOctokit, getFileContent } from './client.js';
 import { commentOnPR } from './ci.js';
 import type { PlannedBump } from '../../shared/types.js';
+import { dedent } from '../../shared/text.js';
 
 const TODO_PREFIX = '// TODO(depbot-triage):';
 
@@ -238,7 +239,7 @@ export function buildAnalysisOutput(
     let comment = `**⚠️ Breaking change in \`${bump.packageName}\` ${bump.currentVersion} → ${bump.targetVersion}**\n\n`;
     comment += `${f.analysis}\n`;
     if (f.suggestedFix) {
-      comment += `\n**Suggested fix:**\n\`\`\`${lang}\n${f.suggestedFix}\n\`\`\`\n`;
+      comment += `\n**Suggested fix:**\n\`\`\`${lang}\n${dedent(f.suggestedFix)}\n\`\`\`\n`;
     }
     return { path: f.file, line: f.line, body: comment };
   });
