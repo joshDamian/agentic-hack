@@ -7,6 +7,7 @@ import { safetyAnalyserFlow } from './agents/safety/index.js';
 import { executorFlow } from './agents/executor/index.js';
 import { monitorFlow } from './agents/monitor/index.js';
 import { pipelineFlow } from './pipeline.js';
+import { reanalyseFlow } from './reanalyse.js';
 import { dashboardHandler } from './dashboard.js';
 import { config } from './shared/config.js';
 import { listInstallationRepos } from './tools/github/client.js';
@@ -22,6 +23,17 @@ app.post('/trigger', (req, res) => {
   console.log(`Pipeline triggered for ${owner}/${repo}`);
   pipelineFlow({ owner, repo }).catch((err) => console.error('Pipeline error:', err));
   res.json({ started: true, owner, repo });
+});
+
+app.post('/reanalyse', (req, res) => {
+  const { campaignId, packageName } = req.body as { campaignId: string; packageName: string };
+  if (!campaignId || !packageName) {
+    res.status(400).json({ error: 'campaignId and packageName are required' });
+    return;
+  }
+  console.log(`Re-analysis triggered for ${packageName} in campaign ${campaignId}`);
+  reanalyseFlow({ campaignId, packageName }).catch((err) => console.error('Re-analysis error:', err));
+  res.json({ started: true, campaignId, packageName });
 });
 
 app.get('/api/repos', async (_req, res) => {
