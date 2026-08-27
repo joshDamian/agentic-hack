@@ -33,4 +33,11 @@ export async function listCampaigns(): Promise<Campaign[]> {
   return snapshot.docs.map((d) => d.data() as Campaign);
 }
 
+export async function findStuckCampaign(owner: string, repo: string): Promise<Campaign | null> {
+  const all = await listCampaigns();
+  const match = all.find((c) => c.repoOwner === owner && c.repoName === repo);
+  if (!match || ['done', 'failed'].includes(match.status)) return null;
+  return match;
+}
+
 export { db };

@@ -32,7 +32,7 @@ export function resolveTypesVersion(typesPackage: string, packageMajor: string):
     try {
       const out = execFileSync(
         'npm', ['view', `${typesPackage}@${range}`, 'version', '--json'],
-        { encoding: 'utf-8', timeout: 10_000 },
+        { encoding: 'utf-8', timeout: 10_000, stdio: ['pipe', 'pipe', 'ignore'] },
       ).trim();
       const parsed = JSON.parse(out);
       if (Array.isArray(parsed)) return parsed[parsed.length - 1] || null;
