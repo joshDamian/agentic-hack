@@ -71,8 +71,15 @@ function fmtDate(iso: string): string {
 const stageKeys = ['planning', 'analysing', 'executing', 'monitoring', 'done'];
 const stageLabels = ['Plan', 'Analyse', 'Execute', 'Monitor', 'Done'];
 
+function isStuck(c: Campaign): boolean {
+  if (['done', 'failed'].includes(c.status)) return false;
+  const age = Date.now() - new Date(c.updatedAt).getTime();
+  return age > 2 * 60 * 1000;
+}
+
 function renderPage(campaigns: Campaign[], latest: Campaign | null, repo: { owner: string; name: string }): string {
   const active = !!latest && !['done', 'failed'].includes(latest.status);
+  const stuck = !!latest && isStuck(latest);
 
   return `<!doctype html>
 <html lang="en">
@@ -86,9 +93,9 @@ function renderPage(campaigns: Campaign[], latest: Campaign | null, repo: { owne
 <style>${STYLES}</style>
 </head>
 <body>
-${renderTopbar(repo, active)}
+${renderTopbar(repo, active, stuck)}
 <main>
-${latest ? renderRunCard(latest) : renderEmpty()}
+${latest ? renderRunCard(latest, stuck) : renderEmpty()}
 ${campaigns.length > 1 ? renderHistory(campaigns.slice(1)) : ''}
 </main>
 <script>${clientScript(active, repo)}</script>
@@ -100,7 +107,7 @@ const installUrl = config.githubAppSlug
   ? `https://github.com/apps/${config.githubAppSlug}/installations/new`
   : '';
 
-function renderTopbar(repo: { owner: string; name: string }, active: boolean): string {
+function renderTopbar(repo: { owner: string; name: string }, active: boolean, stuck: boolean): string {
   const connectBtn = installUrl
     ? `<a class="connect-btn" href="${installUrl}" target="_blank" title="Connect a repository">+</a>`
     : '';
@@ -121,16 +128,18 @@ function renderTopbar(repo: { owner: string; name: string }, active: boolean): s
       <span>Next run</span>
       <span class="schedule-time" id="countdown">—</span>
     </div>
-    <button class="run-btn" id="run-btn" onclick="triggerRun()" ${active ? 'disabled' : ''}>
+    ${stuck ? `<button class="run-btn" onclick="triggerRun(false)"><svg viewBox="0 0 12 14"><polygon points="2,0 12,7 2,14"/></svg> Resume</button>
+    <button class="run-btn run-btn-secondary" onclick="triggerRun(true)">Start fresh</button>`
+    : `<button class="run-btn" id="run-btn" onclick="triggerRun()" ${active ? 'disabled' : ''}>
       ${active ? '<span class="spinner"></span> Running…' : '<svg viewBox="0 0 12 14"><polygon points="2,0 12,7 2,14"/></svg> Run now'}
-    </button>
+    </button>`}
   </div>
 </div>`;
 }
 
-function renderRunCard(c: Campaign): string {
-  const statusLabel = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : 'Running';
-  const statusCls = c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : 'active';
+function renderRunCard(c: Campaign, stuck: boolean): string {
+  const statusLabel = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : stuck ? 'Interrupted' : 'Running';
+  const statusCls = c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : stuck ? 'stuck' : 'active';
 
   return `<div class="run-card">
   <div class="run-header">
@@ -376,15 +385,15 @@ function toggle(row) {
   else detail.classList.remove('open');
 }
 
-async function triggerRun() {
-  var btn = document.getElementById('run-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Starting\\u2026';
+async function triggerRun(fresh) {
+  var btns = document.querySelectorAll('.run-btn');
+  btns.forEach(function(b) { b.disabled = true; });
+  event.target.innerHTML = '<span class="spinner"></span> Starting\\u2026';
   try {
     await fetch('/trigger', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: '${repo.owner}', repo: '${repo.name}' })
+      body: JSON.stringify({ owner: '${repo.owner}', repo: '${repo.name}', fresh: !!fresh })
     });
   } catch (e) { console.error(e); }
   pollUntilActive();
@@ -647,6 +656,7 @@ body {
 .run-btn:hover { opacity: 0.88; }
 .run-btn:disabled { opacity: 0.5; cursor: default; }
 .run-btn svg { width: 12px; height: 12px; fill: currentColor; }
+.run-btn-secondary { background: var(--bg-card); color: var(--text); border: 1px solid var(--edge); }
 
 .spinner {
   display: inline-block; width: 12px; height: 12px;
@@ -679,6 +689,7 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .run-status.done { background: var(--safe-bg); color: var(--safe); }
 .run-status.failed { background: var(--risk-bg); color: var(--risk); }
 .run-status.active { background: var(--accent-dim); color: var(--accent); }
+.run-status.stuck { background: var(--risk-bg); color: var(--risk); }
 .run-status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 
 .run-body { padding: 1.5rem 1.25rem; }

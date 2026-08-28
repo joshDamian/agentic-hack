@@ -21,9 +21,10 @@ app.get('/', dashboardHandler);
 app.post('/trigger', (req, res) => {
   const owner = (req.body.owner as string) || config.targetRepo.owner;
   const repo = (req.body.repo as string) || config.targetRepo.name;
-  console.log(`Pipeline triggered for ${owner}/${repo}`);
-  pipelineFlow({ owner, repo }).catch((err) => console.error('Pipeline error:', err));
-  res.json({ started: true, owner, repo });
+  const fresh = req.body.fresh === true;
+  console.log(`Pipeline triggered for ${owner}/${repo}${fresh ? ' (fresh)' : ''}`);
+  pipelineFlow({ owner, repo, fresh }).catch((err) => console.error('Pipeline error:', err));
+  res.json({ started: true, owner, repo, fresh });
 });
 
 app.post('/reanalyse', (req, res) => {

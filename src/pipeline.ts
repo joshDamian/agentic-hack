@@ -44,6 +44,7 @@ export const pipelineFlow = ai.defineFlow(
       owner: z.string(),
       repo: z.string(),
       dryRun: z.boolean().optional(),
+      fresh: z.boolean().optional(),
     }),
     outputSchema: z.object({
       campaignId: z.string(),
@@ -54,9 +55,13 @@ export const pipelineFlow = ai.defineFlow(
       risky: z.number(),
     }),
   },
-  async ({ owner, repo, dryRun }) => {
+  async ({ owner, repo, dryRun, fresh }) => {
     // Check for a stuck campaign to resume
-    const stuck = await findStuckCampaign(owner, repo);
+    if (fresh) {
+      const old = await findStuckCampaign(owner, repo);
+      if (old) await updateCampaign(old.id, { status: 'failed' });
+    }
+    const stuck = fresh ? null : await findStuckCampaign(owner, repo);
     if (stuck) {
       console.log(`Resuming stuck campaign ${stuck.id} (status: ${stuck.status})`);
       const reconciled = await reconcilePRs(owner, repo, stuck.plan);
