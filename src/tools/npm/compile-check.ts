@@ -8,6 +8,7 @@ export interface CompileError {
   file: string;
   line: number;
   message: string;
+  suggestion?: string;
 }
 
 export interface CompileCheckResult {
@@ -105,7 +106,8 @@ function parseTscErrors(
 
     const originalPath = [...sourceFiles.keys()].find((f) => path.basename(f) === basename) ?? file;
     const cleanMessage = message.replace(/["']\/[^"']*\/node_modules\//g, '"');
-    errors.push({ file: originalPath, line: parseInt(lineStr, 10), message: cleanMessage });
+    const suggestion = cleanMessage.match(/Did you mean '(\w+)'/)?.[1];
+    errors.push({ file: originalPath, line: parseInt(lineStr, 10), message: cleanMessage, suggestion });
   }
 
   return errors;
@@ -116,5 +118,8 @@ function isNoiseError(message: string, packageName: string): boolean {
   if (message.includes('implicitly has an \'any\' type')) return true;
   if (message.includes('Cannot find name') && !message.includes(packageName)) return true;
   if (message.includes('install type definitions for')) return true;
+  if (message.includes('Unterminated string literal')) return true;
+  if (/^'[^']+' expected\.$/.test(message)) return true;
+  if (message.includes('Identifier expected')) return true;
   return false;
 }

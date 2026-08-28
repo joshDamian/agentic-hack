@@ -310,7 +310,7 @@ function renderDetail(b: PlannedBump): string {
       html += `<div class="finding affected">
         <div class="finding-loc">${esc(f.file)}:${f.line}</div>
         <p>${esc(f.analysis)}</p>
-        ${f.suggestedFix ? `<pre class="code-block">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}
+        ${f.suggestedFix ? `<div class="fix-label">Suggested fix</div><pre class="code-block">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}
       </div>`;
     }
     if (ok.length > 0) {
@@ -834,6 +834,7 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .finding.affected .finding-loc { color: var(--risk); }
 .finding.ok .finding-loc { color: var(--text-faint); }
 .finding p { line-height: 1.45; }
+.fix-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--safe); margin-top: 0.5rem; margin-bottom: 0.25rem; }
 .fp-toggle {
   background: none; border: none; cursor: pointer; padding: 0; margin-top: 0.25rem;
   font-family: 'Source Sans 3', sans-serif; font-size: 0.75rem; font-weight: 600;

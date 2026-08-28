@@ -139,7 +139,7 @@ export async function createBranchAndPR(
     sha: commit.sha,
   });
 
-  const prBody = formatPRBody(bump);
+  const prBody = formatPRBody(bump, owner, repo);
   const { data: pr } = await octokit.rest.pulls.create({
     owner, repo,
     title: `bump ${bump.packageName} to ${bump.targetVersion}`,
@@ -161,7 +161,7 @@ function findDepKey(
   return null;
 }
 
-function formatPRBody(bump: PlannedBump): string {
+function formatPRBody(bump: PlannedBump, owner: string, repo: string): string {
   const verdictEmoji = bump.verdict === 'safe' ? '✅' : bump.verdict === 'risky' ? '⚠️' : '❓';
 
   let body = `## Dependency bump
@@ -187,7 +187,10 @@ ${bump.verdictReason ?? 'Analysis pending'}
     }
   }
 
-  body += `\n### Alerts closed\n\n${bump.alertNumbers.map((n) => `- #${n}`).join('\n')}`;
+  const alertLinks = bump.alertNumbers
+    .map((n) => `- [Alert #${n}](https://github.com/${owner}/${repo}/security/dependabot/${n})`)
+    .join('\n');
+  body += `\n### Alerts closed\n\n${alertLinks}`;
   body += '\n\n---\n*Opened by [depbot-triage](https://github.com/joshDamian/agentic-hack) — an autonomous Dependabot backlog agent.*';
   return body;
 }
@@ -211,17 +214,8 @@ export function buildAnalysisOutput(
 
   let body = `## ${verdictEmoji} Safety Analysis — \`${bump.packageName}\` ${bump.currentVersion} → ${bump.targetVersion}\n\n`;
 
-  if (bump.breakingChanges?.length) {
-    body += '### Breaking changes\n\n';
-    for (const bc of bump.breakingChanges) {
-      body += `- **${bc.kind}**: \`${bc.api}\` — ${bc.description}\n`;
-    }
-    body += '\n';
-  }
-
   if (affected.length > 0) {
-    body += `### ⚠️ ${affected.length} affected location${affected.length > 1 ? 's' : ''}\n\n`;
-    body += 'See inline review comments below for details.\n\n';
+    body += `Found ${affected.length} location${affected.length > 1 ? 's' : ''} in this codebase affected by the upgrade. See inline comments for details.\n\n`;
   }
 
   if (falsePositives.length > 0) {
@@ -262,12 +256,22 @@ export async function postAnalysisReview(
   const { reviewBody, inlineComments } = buildAnalysisOutput(bump, owner, repo);
   if (!reviewBody) return;
 
+  const octokit = await getInstallationOctokit();
+
+  // Skip if we already posted a review/comment on this PR
+  const [{ data: existingReviews }, { data: existingComments }] = await Promise.all([
+    octokit.rest.pulls.listReviews({ owner, repo, pull_number: prNumber }),
+    octokit.rest.issues.listComments({ owner, repo, issue_number: prNumber }),
+  ]);
+  const alreadyPosted = existingReviews.some((r) => r.body?.includes('Safety Analysis'))
+    || existingComments.some((c) => c.body?.includes('Safety Analysis'));
+  if (alreadyPosted) return;
+
   if (inlineComments.length === 0) {
     await commentOnPR(owner, repo, prNumber, reviewBody);
     return;
   }
 
-  const octokit = await getInstallationOctokit();
   const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
   const { data: files } = await octokit.rest.pulls.listFiles({ owner, repo, pull_number: prNumber });
 
@@ -278,16 +282,29 @@ export async function postAnalysisReview(
     if (!diffFile?.patch) continue;
 
     let position = 0;
+    let newLine = 0;
+    let found = false;
     for (const line of diffFile.patch.split('\n')) {
-      if (line.startsWith('@@')) {
-        position = 0;
+      const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+      if (hunk) {
+        newLine = parseInt(hunk[1], 10) - 1;
+        position++;
         continue;
       }
+      if (line.startsWith('-')) {
+        position++;
+        continue;
+      }
+      newLine++;
       position++;
-      if (line.startsWith('+') && line.includes(TODO_PREFIX)) {
+      if (newLine === c.line) {
         comments.push({ path: c.path, position, body: c.body });
+        found = true;
         break;
       }
+    }
+    if (!found && diffFile.patch) {
+      comments.push({ path: c.path, position: 1, body: c.body });
     }
   }
 

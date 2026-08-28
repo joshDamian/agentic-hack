@@ -76,9 +76,10 @@ export async function getFileContent(
   owner: string,
   repo: string,
   path: string,
+  ref?: string,
 ): Promise<string> {
   const octokit = await getInstallationOctokit();
-  const { data } = await octokit.rest.repos.getContent({ owner, repo, path });
+  const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ...(ref && { ref }) });
   if (!('content' in data)) throw new Error(`${path} is not a file`);
   return Buffer.from(data.content, 'base64').toString('utf-8');
 }
