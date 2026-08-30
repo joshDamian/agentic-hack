@@ -1,4 +1,4 @@
-import { genkit } from 'genkit';
+import { genkit } from 'genkit/beta';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { config } from './shared/config.js';
 
@@ -9,5 +9,5 @@ export const ai = genkit({
       location: config.gcpLocation,
     }),
   ],
-  model: vertexAI.model('gemini-3.5-flash'),
+  model: vertexAI.model(config.extractionModel),
 });

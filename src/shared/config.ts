@@ -1,6 +1,8 @@
 export const config = {
   gcpProject: process.env.GOOGLE_CLOUD_PROJECT ?? 'all-things-agentic-506113',
   gcpLocation: process.env.GOOGLE_CLOUD_LOCATION ?? 'europe-west3',
+  extractionModel: process.env.EXTRACTION_MODEL ?? 'gemini-3.5-flash',
+  classificationModel: process.env.CLASSIFICATION_MODEL ?? 'gemini-3.5-flash',
   githubAppId: process.env.GITHUB_APP_ID ?? '',
   githubAppKeyPath: process.env.GITHUB_APP_KEY_PATH ?? `${process.env.HOME}/.config/agentic-hack/github-app.pem`,
   githubInstallationId: process.env.GITHUB_INSTALLATION_ID ?? '',
