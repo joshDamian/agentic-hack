@@ -26,9 +26,11 @@ const commitFixTool = ai.defineTool(
     }),
   },
   async ({ owner, repo, branch, filePath, oldCode, newCode, commitMessage }) => {
-    const blocked = ['package.json', 'package-lock.json', 'tsconfig.json'];
-    if (blocked.includes(filePath)) {
-      return { success: false, error: `Editing ${filePath} is not allowed — only fix source files` };
+    if (filePath === 'package-lock.json') {
+      return { success: false, error: 'Editing package-lock.json is not allowed — it is managed by npm' };
+    }
+    if (filePath.endsWith('.json') && (/\/\/\s/.test(newCode) || /\/\*/.test(newCode))) {
+      return { success: false, error: 'Cannot write JS-style comments into JSON files' };
     }
 
     try {
@@ -100,5 +102,5 @@ When asked to apply a fix:
 
 If the suggested fix looks wrong or incomplete, say so instead of applying a bad fix.
 If the fix requires changes across multiple files, handle each file in sequence.
-Never edit package.json, package-lock.json, or tsconfig.json — those are managed by the pipeline.`,
+Never edit package-lock.json — it is managed by npm. You may edit package.json and tsconfig.json if the fix requires it. Never write comments into JSON files — JSON does not support comments.`,
 });
