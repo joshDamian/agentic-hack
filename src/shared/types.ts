@@ -62,4 +62,6 @@ export interface Campaign {
   plan: PlannedBump[];
   createdAt: string;
   updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
 }

@@ -68,6 +68,18 @@ function fmtDate(iso: string): string {
   });
 }
 
+function fmtDuration(startIso: string, endIso: string): string {
+  const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const rem = secs % 60;
+  if (mins < 60) return rem > 0 ? `${mins}m ${rem}s` : `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
+}
+
 const stageKeys = ['planning', 'analysing', 'executing', 'monitoring', 'done'];
 const stageLabels = ['Plan', 'Analyse', 'Execute', 'Monitor', 'Done'];
 
@@ -75,6 +87,21 @@ function isStuck(c: Campaign): boolean {
   if (['done', 'failed'].includes(c.status)) return false;
   const age = Date.now() - new Date(c.updatedAt).getTime();
   return age > 2 * 60 * 1000;
+}
+
+function renderToast(c: Campaign): string {
+  if (c.status !== 'done' || !c.completedAt) return '';
+  const ago = Date.now() - new Date(c.completedAt).getTime();
+  if (ago > 5 * 60 * 1000) return '';
+  const duration = c.startedAt ? fmtDuration(c.startedAt, c.completedAt) : '';
+  const safe = c.plan.filter((b) => b.verdict === 'safe').length;
+  const risky = c.plan.filter((b) => b.verdict === 'risky').length;
+  const prs = c.plan.filter((b) => b.prNumber).length;
+  return `<div class="toast" id="toast">
+  <span class="toast-icon">&#10003;</span>
+  <span class="toast-text">Pipeline completed${duration ? ` in <strong>${duration}</strong>` : ''} &mdash; ${safe} safe, ${risky} risky, ${prs} PRs opened</span>
+  <button class="toast-close" onclick="document.getElementById('toast').remove()">&times;</button>
+</div>`;
 }
 
 function renderPage(campaigns: Campaign[], latest: Campaign | null, repo: { owner: string; name: string }): string {
@@ -95,6 +122,7 @@ function renderPage(campaigns: Campaign[], latest: Campaign | null, repo: { owne
 <body>
 ${renderTopbar(repo, active, stuck)}
 <main>
+${latest ? renderToast(latest) : ''}
 ${latest ? renderRunCard(latest, stuck) : renderEmpty()}
 ${campaigns.length > 1 ? renderHistory(campaigns.slice(1)) : ''}
 </main>
@@ -141,6 +169,10 @@ function renderRunCard(c: Campaign, stuck: boolean): string {
   const statusLabel = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : stuck ? 'Interrupted' : 'Running';
   const statusCls = c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : stuck ? 'stuck' : 'active';
 
+  const durationTag = c.startedAt && c.completedAt
+    ? `<span class="run-sep">&middot;</span><span class="run-duration">${fmtDuration(c.startedAt, c.completedAt)}</span>`
+    : '';
+
   return `<div class="run-card">
   <div class="run-header">
     <span class="run-label">Latest run</span>
@@ -148,6 +180,7 @@ function renderRunCard(c: Campaign, stuck: boolean): string {
     <span class="run-time">${fmtDate(c.createdAt)}</span>
     <span class="run-sep">&middot;</span>
     <span class="run-status ${statusCls}"><span class="run-status-dot"></span> ${statusLabel}</span>
+    ${durationTag}
   </div>
   <div class="run-body">
     ${renderPipeline(c.status)}
@@ -359,10 +392,12 @@ function renderHistory(campaigns: Campaign[]): string {
     .map((c) => {
       const cls = c.status === 'failed' ? ' failed' : '';
       const label = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : c.status;
+      const dur = c.startedAt && c.completedAt ? fmtDuration(c.startedAt, c.completedAt) : '—';
       return `<div class="history-row">
       <span class="history-repo">${esc(c.repoOwner)}/${esc(c.repoName)}</span>
       <span><span class="history-status${cls}">${label}</span></span>
       <span>${c.plan.length}</span>
+      <span class="run-duration">${dur}</span>
       <span style="color:var(--text-dim)">${fmtDate(c.createdAt)}</span>
     </div>`;
     })
@@ -372,7 +407,7 @@ function renderHistory(campaigns: Campaign[]): string {
   <div class="history-title">Previous runs</div>
   <div class="history-list">
     <div class="history-row head">
-      <span>Repository</span><span>Status</span><span>Bumps</span><span>Date</span>
+      <span>Repository</span><span>Status</span><span>Bumps</span><span>Duration</span><span>Date</span>
     </div>
     ${rows}
   </div>
@@ -736,6 +771,25 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .run-status.active { background: var(--accent-dim); color: var(--accent); }
 .run-status.stuck { background: var(--risk-bg); color: var(--risk); }
 .run-status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.run-duration {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+  color: var(--text-dim); letter-spacing: 0.02em;
+}
+
+.toast {
+  display: flex; align-items: center; gap: 0.625rem;
+  background: var(--safe-bg); border: 1px solid var(--safe);
+  border-radius: var(--radius); padding: 0.625rem 1rem; margin-bottom: 1rem;
+  animation: toast-in 0.3s ease-out;
+}
+.toast-icon { color: var(--safe); font-weight: 700; font-size: 0.875rem; }
+.toast-text { flex: 1; font-size: 0.8125rem; color: var(--text); }
+.toast-close {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 1rem; padding: 0 0.25rem; line-height: 1;
+}
+.toast-close:hover { color: var(--text); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
 
 .run-body { padding: 1.5rem 1.25rem; }
 
@@ -1034,7 +1088,7 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
   overflow: hidden; background: var(--surface);
 }
 .history-row {
-  display: grid; grid-template-columns: 2fr 0.8fr 0.6fr 1.2fr; gap: 0.5rem;
+  display: grid; grid-template-columns: 2fr 0.8fr 0.6fr 0.7fr 1.2fr; gap: 0.5rem;
   padding: 0.5rem 0.875rem; font-size: 0.8125rem; align-items: center;
   border-bottom: 1px solid var(--edge);
 }

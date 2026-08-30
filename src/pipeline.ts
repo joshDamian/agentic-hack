@@ -92,6 +92,7 @@ export const pipelineFlow = ai.defineFlow(
       plan: bumps,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
     };
     await createCampaign(campaign);
     console.log(`Campaign ${campaignId}: ${bumps.length} bumps for ${alerts.length} alerts`);
@@ -107,6 +108,10 @@ async function resumeCampaign(
   dryRun?: boolean,
 ) {
   const { id: campaignId, plan: bumps } = campaign;
+
+  if (!campaign.startedAt) {
+    await updateCampaign(campaignId, { startedAt: new Date().toISOString() });
+  }
 
   // --- Analyse (skip if already past) ---
   if (!stageAtOrPast(campaign.status, 'executing')) {
@@ -181,7 +186,7 @@ async function resumeCampaign(
       await commentOnPR(owner, repo, bump.prNumber, `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`);
     }
   }
-  await updateCampaign(campaignId, { plan: bumps, status: 'done' });
+  await updateCampaign(campaignId, { plan: bumps, status: 'done', completedAt: new Date().toISOString() });
 
   const safe = bumps.filter((b) => b.verdict === 'safe').length;
   const risky = bumps.filter((b) => b.verdict === 'risky').length;
