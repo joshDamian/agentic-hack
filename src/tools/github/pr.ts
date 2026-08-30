@@ -2,6 +2,7 @@ import { getInstallationOctokit, getFileContent } from './client.js';
 import { commentOnPR } from './ci.js';
 import type { PlannedBump } from '../../shared/types.js';
 import { dedent } from '../../shared/text.js';
+import { regenerateLockfile } from '../npm/lockfile.js';
 
 const TODO_PREFIX = '// TODO(depbot-triage):';
 
@@ -76,6 +77,21 @@ export async function createBranchAndPR(
     encoding: 'base64',
   });
   treeEntries.push({ path: 'package.json', mode: '100644', type: 'blob', sha: pkgBlob.sha });
+
+  try {
+    const lockRaw = await getFileContent(owner, repo, 'package-lock.json', defaultBranch);
+    const updatedLock = await regenerateLockfile(updatedContent, lockRaw);
+    if (updatedLock) {
+      const { data: lockBlob } = await octokit.rest.git.createBlob({
+        owner, repo,
+        content: Buffer.from(updatedLock).toString('base64'),
+        encoding: 'base64',
+      });
+      treeEntries.push({ path: 'package-lock.json', mode: '100644', type: 'blob', sha: lockBlob.sha });
+    }
+  } catch (err) {
+    console.log(`  Lockfile regeneration failed, PR will only contain package.json: ${err instanceof Error ? err.message : err}`);
+  }
 
   const affected = bump.findings?.filter((f) => f.isAffected) ?? [];
   if (affected.length > 0) {

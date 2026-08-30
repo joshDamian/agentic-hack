@@ -17,7 +17,11 @@ export const readRepoFile = ai.defineTool(
     outputSchema: z.string(),
   },
   async ({ owner, repo, path, ref }) => {
-    return getFileContent(owner, repo, path, ref);
+    try {
+      return await getFileContent(owner, repo, path, ref);
+    } catch (err: any) {
+      return `Error reading ${path}: ${err.message ?? err}`;
+    }
   },
 );
 
@@ -33,15 +37,19 @@ export const listRepoFiles = ai.defineTool(
     outputSchema: z.string(),
   },
   async ({ owner, repo, ref }) => {
-    const octokit = await getInstallationOctokit();
-    const { data: tree } = await octokit.rest.git.getTree({
-      owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-    });
-    const files = tree.tree
-      .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-      .map((f) => f.path!)
-      .filter((p) => p.startsWith('src/'));
-    return files.join('\n');
+    try {
+      const octokit = await getInstallationOctokit();
+      const { data: tree } = await octokit.rest.git.getTree({
+        owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
+      });
+      const files = tree.tree
+        .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
+        .map((f) => f.path!)
+        .filter((p) => p.startsWith('src/'));
+      return files.join('\n');
+    } catch (err: any) {
+      return `Error listing files: ${err.message ?? err}`;
+    }
   },
 );
 
@@ -58,14 +66,19 @@ export const searchCodeInRepo = ai.defineTool(
     outputSchema: z.string(),
   },
   async ({ owner, repo, pattern, ref }) => {
-    const octokit = await getInstallationOctokit();
-    const { data: tree } = await octokit.rest.git.getTree({
-      owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-    });
-    const files = tree.tree
-      .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-      .map((f) => f.path!)
-      .filter((p) => p.startsWith('src/'));
+    let files: string[];
+    try {
+      const octokit = await getInstallationOctokit();
+      const { data: tree } = await octokit.rest.git.getTree({
+        owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
+      });
+      files = tree.tree
+        .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
+        .map((f) => f.path!)
+        .filter((p) => p.startsWith('src/'));
+    } catch (err: any) {
+      return `Error listing repo tree: ${err.message ?? err}`;
+    }
 
     const results: string[] = [];
     for (const filePath of files) {
@@ -105,14 +118,19 @@ export const runCompileCheck = ai.defineTool(
     outputSchema: z.string(),
   },
   async ({ owner, repo, packageName, targetVersion, ref }) => {
-    const octokit = await getInstallationOctokit();
-    const { data: tree } = await octokit.rest.git.getTree({
-      owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-    });
-    const files = tree.tree
-      .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-      .map((f) => f.path!)
-      .filter((p) => p.startsWith('src/'));
+    let files: string[];
+    try {
+      const octokit = await getInstallationOctokit();
+      const { data: tree } = await octokit.rest.git.getTree({
+        owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
+      });
+      files = tree.tree
+        .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
+        .map((f) => f.path!)
+        .filter((p) => p.startsWith('src/'));
+    } catch (err: any) {
+      return `Error listing repo tree: ${err.message ?? err}`;
+    }
 
     const sourceFiles = new Map<string, string>();
     for (const filePath of files) {
@@ -126,13 +144,17 @@ export const runCompileCheck = ai.defineTool(
 
     if (sourceFiles.size === 0) return 'No source files import this package.';
 
-    const result = await compileCheck(packageName, targetVersion, sourceFiles);
-    if (!result.ran) return 'Compile check did not run (no relevant source files).';
-    if (result.errors.length === 0) return 'Clean — no errors.';
+    try {
+      const result = await compileCheck(packageName, targetVersion, sourceFiles);
+      if (!result.ran) return 'Compile check did not run (no relevant source files).';
+      if (result.errors.length === 0) return 'Clean — no errors.';
 
-    return result.errors.map((e) =>
-      `${e.file}:${e.line} — ${e.message}`
-    ).join('\n');
+      return result.errors.map((e) =>
+        `${e.file}:${e.line} — ${e.message}`
+      ).join('\n');
+    } catch (err: any) {
+      return `Compile check failed: ${err.message ?? err}`;
+    }
   },
 );
 
@@ -148,8 +170,12 @@ export const getTypeDiffTool = ai.defineTool(
     outputSchema: z.string(),
   },
   async ({ packageName, oldVersion, newVersion }) => {
-    const result = getPackageTypeDiff(packageName, oldVersion, newVersion);
-    if (!result.hasDtsChanges) return 'No type definition changes between these versions.';
-    return result.diff;
+    try {
+      const result = getPackageTypeDiff(packageName, oldVersion, newVersion);
+      if (!result.hasDtsChanges) return 'No type definition changes between these versions.';
+      return result.diff;
+    } catch (err: any) {
+      return `Type diff failed: ${err.message ?? err}`;
+    }
   },
 );

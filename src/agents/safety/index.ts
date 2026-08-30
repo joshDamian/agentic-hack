@@ -14,14 +14,19 @@ const MAX_LINES_PER_FILE = 500;
 async function gatherCodeContext(
   owner: string, repo: string, packageName: string, ref?: string,
 ): Promise<string> {
-  const octokit = await getInstallationOctokit();
-  const { data: tree } = await octokit.rest.git.getTree({
-    owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-  });
-  const allFiles = tree.tree
-    .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-    .map((f) => f.path!)
-    .filter((p) => p.startsWith('src/'));
+  let allFiles: string[];
+  try {
+    const octokit = await getInstallationOctokit();
+    const { data: tree } = await octokit.rest.git.getTree({
+      owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
+    });
+    allFiles = tree.tree
+      .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
+      .map((f) => f.path!)
+      .filter((p) => p.startsWith('src/'));
+  } catch {
+    return 'Could not list repository files (tree fetch failed).';
+  }
 
   const matched: Array<{ path: string; content: string }> = [];
   for (const filePath of allFiles) {
