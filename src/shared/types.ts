@@ -54,6 +54,7 @@ export interface PlannedBump {
   prNumber?: number;
   prUrl?: string;
   ciStatus?: 'pending' | 'success' | 'failure' | 'no-checks';
+  fixAttempts?: number;
 }
 
 export interface Campaign {

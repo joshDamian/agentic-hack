@@ -3,8 +3,21 @@ import type { Request, Response } from 'express';
 import { config } from './shared/config.js';
 import { listCampaigns, updateBumps, updateCampaign } from './tools/firestore/client.js';
 import { getPRCIStatus, commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
+import { getInstallationOctokit } from './tools/github/client.js';
 import { classifyBump, reanalyseWithCIErrors } from './agents/safety/index.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
+
+const MAX_FIX_ATTEMPTS = 5;
+
+async function getBranchCommitHistory(owner: string, repo: string, branch: string, limit = 10): Promise<string> {
+  try {
+    const octokit = await getInstallationOctokit();
+    const { data } = await octokit.rest.repos.listCommits({ owner, repo, sha: branch, per_page: limit });
+    return data.map((c) => `- ${c.sha.slice(0, 7)}: ${c.commit.message.split('\n')[0]}`).join('\n');
+  } catch {
+    return '';
+  }
+}
 
 export async function webhookHandler(req: Request, res: Response): Promise<void> {
   const event = req.headers['x-github-event'] as string;
@@ -73,22 +86,31 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
 
     const fields: Partial<PlannedBump> = { ciStatus: status };
 
+    const atCap = (bump.fixAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
+
     if (status === 'success' && bump.verdict !== 'safe') {
-      console.log(`  Webhook: CI passing for ${bump.packageName} but verdict is ${bump.verdict}, re-analysing...`);
-      const prevVerdict = bump.verdict;
-      const branchRef = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
-      await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
-      try {
-        const result = await classifyBump(owner, repoName, bump, branchRef);
-        fields.verdict = result.verdict;
-        fields.verdictReason = result.reason;
-        fields.breakingChanges = result.breakingChanges;
-        fields.findings = result.findings;
+      if (atCap) {
+        console.log(`  Webhook: ${bump.packageName} hit fix cap (${MAX_FIX_ATTEMPTS}), skipping re-analysis`);
         await commentOnPR(owner, repoName, bump.prNumber!,
-          `✅ **CI passed.** Re-analysed — verdict updated to **${result.verdict}**.`);
-      } catch (err) {
-        fields.verdict = prevVerdict;
-        console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
+          `✅ **CI passed** but fix attempts exhausted (${MAX_FIX_ATTEMPTS}). Needs manual review.`);
+      } else {
+        console.log(`  Webhook: CI passing for ${bump.packageName} but verdict is ${bump.verdict}, re-analysing...`);
+        const prevVerdict = bump.verdict;
+        const branchRef = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
+        const commitHistory = await getBranchCommitHistory(owner, repoName, branchRef);
+        await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
+        try {
+          const result = await classifyBump(owner, repoName, bump, branchRef);
+          fields.verdict = result.verdict;
+          fields.verdictReason = result.reason;
+          fields.breakingChanges = result.breakingChanges;
+          fields.findings = result.findings;
+          await commentOnPR(owner, repoName, bump.prNumber!,
+            `✅ **CI passed.** Re-analysed — verdict updated to **${result.verdict}**.`);
+        } catch (err) {
+          fields.verdict = prevVerdict;
+          console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
+        }
       }
     } else if (status === 'success' && bump.verdict === 'safe') {
       await commentOnPR(owner, repoName, bump.prNumber!,
@@ -96,26 +118,37 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
     }
 
     if (status === 'failure') {
-      console.log(`  Webhook: CI failed for ${bump.packageName}, pulling logs...`);
-      const ciErrors = await getCIFailureLogs(owner, repoName, bump.prNumber!);
-      if (ciErrors) {
-        console.log(`  Webhook: Re-analysing ${bump.packageName} with CI errors...`);
-        const prevVerdict = bump.verdict;
-        await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
-        try {
-          const result = await reanalyseWithCIErrors(owner, repoName, bump, ciErrors);
-          fields.verdict = result.verdict;
-          fields.verdictReason = result.reason;
-          fields.findings = result.findings;
-          await commentOnPR(owner, repoName, bump.prNumber!,
-            `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
-        } catch (err) {
-          fields.verdict = prevVerdict;
-          console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
-        }
-      } else {
+      if (atCap) {
+        console.log(`  Webhook: ${bump.packageName} hit fix cap (${MAX_FIX_ATTEMPTS}), skipping re-analysis`);
         await commentOnPR(owner, repoName, bump.prNumber!,
-          `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`);
+          `❌ **CI failed.** Fix attempts exhausted (${MAX_FIX_ATTEMPTS}). Details: ${details}\n\nThis bump needs manual investigation.`);
+      } else {
+        console.log(`  Webhook: CI failed for ${bump.packageName}, pulling logs...`);
+        const ciErrors = await getCIFailureLogs(owner, repoName, bump.prNumber!);
+        if (ciErrors) {
+          console.log(`  Webhook: Re-analysing ${bump.packageName} with CI errors...`);
+          const branchRef = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
+          const commitHistory = await getBranchCommitHistory(owner, repoName, branchRef);
+          const prevVerdict = bump.verdict;
+          await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
+          try {
+            const enrichedErrors = commitHistory
+              ? `${ciErrors}\n\nPrevious fix attempts on this branch:\n${commitHistory}`
+              : ciErrors;
+            const result = await reanalyseWithCIErrors(owner, repoName, bump, enrichedErrors);
+            fields.verdict = result.verdict;
+            fields.verdictReason = result.reason;
+            fields.findings = result.findings;
+            await commentOnPR(owner, repoName, bump.prNumber!,
+              `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
+          } catch (err) {
+            fields.verdict = prevVerdict;
+            console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
+          }
+        } else {
+          await commentOnPR(owner, repoName, bump.prNumber!,
+            `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`);
+        }
       }
     }
 

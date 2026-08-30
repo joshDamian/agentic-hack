@@ -6,6 +6,7 @@ import {
   readRepoFile,
   runCompileCheck,
   getTypeDiffTool,
+  getPackageDocs,
 } from '../../tools/agent-tools.js';
 
 const findingSchema = z.object({
@@ -27,13 +28,13 @@ export const verdictSchema = z.object({
 export const safetyAgent = ai.defineAgent({
   name: 'safetyAnalyser',
   model: vertexAI.model(config.classificationModel),
-  tools: [readRepoFile, runCompileCheck, getTypeDiffTool],
+  tools: [readRepoFile, runCompileCheck, getTypeDiffTool, getPackageDocs],
   maxTurns: 10,
   system: `You are a dependency upgrade safety analyser. Your job is to determine whether upgrading a package will break the codebase.
 
 The source files that import the package are provided in the prompt — you do not need to search for them. Analyse each file's usage against the breaking changes listed.
 
-If you need more context (e.g. a helper function called from an affected line), use readRepoFile to read additional files. Use runCompileCheck to verify type errors against the target version. Use getTypeDiff to see exactly what APIs changed in the type definitions.
+If you need more context (e.g. a helper function called from an affected line), use readRepoFile to read additional files. Use runCompileCheck to verify type errors against the target version. Use getTypeDiff to see exactly what APIs changed in the type definitions. Use getPackageDocs to fetch the package README for the target version — it often documents the correct import style, API changes, and migration steps.
 
 When you have enough evidence, respond with ONLY a JSON object (no markdown fences, no surrounding text):
 

@@ -2,7 +2,7 @@ import { z } from 'genkit';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { ai } from '../../genkit.js';
 import { config } from '../../shared/config.js';
-import { readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck } from '../../tools/agent-tools.js';
+import { readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck, getPackageDocs } from '../../tools/agent-tools.js';
 import { getInstallationOctokit, getFileContent } from '../../tools/github/client.js';
 import { bustSnapshot } from '../../tools/github/zipball.js';
 
@@ -88,7 +88,7 @@ const commitFixTool = ai.defineTool(
 export const coderAgent = ai.defineAgent({
   name: 'codingAssistant',
   model: vertexAI.model(config.classificationModel),
-  tools: [readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck, commitFixTool],
+  tools: [readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck, getPackageDocs, commitFixTool],
   maxTurns: 20,
   system: `You are a coding assistant that applies fixes for breaking dependency upgrades.
 
@@ -100,7 +100,7 @@ When asked to apply a fix:
 5. Write a clear, short commit message.
 6. After committing, run runCompileCheck against the PR branch (pass the branch name as ref) to verify the fix compiles. If it fails, read the errors, fix them, and commit again.
 
-If the suggested fix looks wrong or incomplete, say so instead of applying a bad fix.
+If the suggested fix looks wrong or incomplete, use getPackageDocs to check the package README for the correct API and import style, then apply the right fix.
 If the fix requires changes across multiple files, handle each file in sequence.
 Never edit package-lock.json — it is managed by npm. You may edit package.json and tsconfig.json if the fix requires it. Never write comments into JSON files — JSON does not support comments.`,
 });

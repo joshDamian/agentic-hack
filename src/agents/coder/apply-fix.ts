@@ -91,7 +91,7 @@ Read each affected file, apply all fixes, then commit. You can make multiple com
       }
       await updateBumps(campaignId, [{
         packageName,
-        fields: { ciStatus: 'pending' },
+        fields: { ciStatus: 'pending', fixAttempts: (bump.fixAttempts ?? 0) + 1 },
       }]);
       const latest = await getCampaign(campaignId);
       if (latest && latest.status === 'done') {

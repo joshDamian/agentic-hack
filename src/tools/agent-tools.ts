@@ -7,6 +7,8 @@ import { getRepoSnapshot } from './github/zipball.js';
 import { compileCheck } from './npm/compile-check.js';
 import { getPackageTypeDiff } from './npm/typediff.js';
 
+const MAX_README_CHARS = 8000;
+
 async function localSourceFiles(
   owner: string,
   repo: string,
@@ -175,6 +177,30 @@ export const getTypeDiffTool = ai.defineTool(
       return result.diff;
     } catch (err: any) {
       return `Type diff failed: ${err.message ?? err}`;
+    }
+  },
+);
+
+export const getPackageDocs = ai.defineTool(
+  {
+    name: 'getPackageDocs',
+    description: 'Fetch the README / documentation for a specific version of an npm package. Use this to understand the correct API, import style, and migration steps.',
+    inputSchema: z.object({
+      packageName: z.string(),
+      version: z.string().describe('The target version to look up, e.g. 7.5.21'),
+    }),
+    outputSchema: z.string(),
+  },
+  async ({ packageName, version }) => {
+    try {
+      const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/${version}`);
+      if (!res.ok) return `No docs found for ${packageName}@${version} (HTTP ${res.status})`;
+      const data = await res.json() as { readme?: string; description?: string };
+      const readme = data.readme ?? data.description ?? 'No README available.';
+      if (readme.length <= MAX_README_CHARS) return readme;
+      return readme.slice(0, MAX_README_CHARS) + `\n\n... (truncated, ${readme.length - MAX_README_CHARS} chars omitted)`;
+    } catch (err: any) {
+      return `Error fetching docs: ${err.message ?? err}`;
     }
   },
 );
