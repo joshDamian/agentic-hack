@@ -8,6 +8,7 @@ import { executorFlow } from './agents/executor/index.js';
 import { monitorFlow } from './agents/monitor/index.js';
 import { pipelineFlow } from './pipeline.js';
 import { reanalyseFlow } from './reanalyse.js';
+import { applyFixFlow } from './agents/coder/apply-fix.js';
 import { dashboardHandler } from './dashboard.js';
 import { config } from './shared/config.js';
 import { listInstallationRepos } from './tools/github/client.js';
@@ -69,6 +70,21 @@ app.get('/api/bump', async (req, res) => {
   const bump = campaign.plan.find((b) => b.packageName === pkg);
   if (!bump) { res.status(404).json({ error: 'Package not in campaign' }); return; }
   res.json({ verdict: bump.verdict ?? null, updatedAt: campaign.updatedAt });
+});
+
+app.post('/api/apply-fix', (req, res) => {
+  const { campaignId, packageName, findingIndex } = req.body as {
+    campaignId: string; packageName: string; findingIndex: number;
+  };
+  if (!campaignId || !packageName || findingIndex === undefined) {
+    res.status(400).json({ error: 'campaignId, packageName, and findingIndex are required' });
+    return;
+  }
+  console.log(`Apply fix triggered: ${packageName} finding #${findingIndex}`);
+  applyFixFlow({ campaignId, packageName, findingIndex })
+    .then((result) => console.log(`Apply fix result: ${result.message}`))
+    .catch((err) => console.error('Apply fix error:', err));
+  res.json({ started: true, campaignId, packageName, findingIndex });
 });
 
 app.post('/pipeline', expressHandler(pipelineFlow));

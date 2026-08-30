@@ -46,6 +46,7 @@ export interface PlannedBump {
     line: number;
     isAffected: boolean;
     analysis: string;
+    originalCode?: string;
     suggestedFix?: string;
   }>;
   prNumber?: number;

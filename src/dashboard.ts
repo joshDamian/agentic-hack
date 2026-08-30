@@ -263,7 +263,7 @@ function renderBumpRow(c: Campaign, b: PlannedBump, i: number): string {
   </div>
   <div class="bump-detail" id="d${i}">
     <div class="detail-inner">
-      ${hasDetail ? renderDetail(b) : ''}
+      ${hasDetail ? renderDetail(c, b) : ''}
       <div class="detail-actions">${reanalyseBtn}</div>
     </div>
   </div>`;
@@ -287,7 +287,7 @@ function highlightCode(code: string, filePath: string): string {
   return hljs.highlightAuto(code).value;
 }
 
-function renderDetail(b: PlannedBump): string {
+function renderDetail(c: Campaign, b: PlannedBump): string {
   let html = '';
 
   if (b.verdictReason) {
@@ -316,10 +316,13 @@ function renderDetail(b: PlannedBump): string {
     const ok = b.findings.filter((f) => !f.isAffected);
     html += '<div class="detail-section"><div class="detail-label">Code review</div>';
     for (const f of affected) {
+      const findingIdx = b.findings!.indexOf(f);
+      const hasApply = f.suggestedFix && b.prNumber;
+      const hasFix = !!(f.originalCode || f.suggestedFix);
       html += `<div class="finding affected">
         <div class="finding-loc">${esc(f.file)}:${f.line}</div>
         <p>${esc(f.analysis)}</p>
-        ${f.suggestedFix ? `<div class="fix-label">Suggested fix</div><pre class="code-block">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}
+        ${hasFix ? `<div class="fix-row"><div class="fix-label">${f.originalCode && f.suggestedFix ? 'Before → After' : 'Suggested fix'}</div>${hasApply ? `<button class="apply-fix-btn" onclick="event.stopPropagation(); applyFix(this, '${esc(c.id)}', '${esc(b.packageName)}', ${findingIdx})">Apply fix</button>` : ''}</div><div class="code-diff">${f.originalCode ? `<pre class="code-block code-before">${highlightCode(dedent(f.originalCode), f.file)}</pre>` : ''}${f.originalCode && f.suggestedFix ? '<div class="diff-arrow">→</div>' : ''}${f.suggestedFix ? `<pre class="code-block code-after">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}</div>` : ''}
       </div>`;
     }
     if (ok.length > 0) {
@@ -453,6 +456,48 @@ async function reanalyse(btn, campaignId, packageName) {
     console.error(e);
     btn.disabled = false;
     btn.textContent = 'Re-analyse';
+  }
+}
+
+async function applyFix(btn, campaignId, packageName, findingIndex) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner spinner-sm"></span> Applying\\u2026';
+  try {
+    var res = await fetch('/api/apply-fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId: campaignId, packageName: packageName, findingIndex: findingIndex })
+    });
+    var data = await res.json();
+    if (data.started) {
+      btn.innerHTML = '<span class="spinner spinner-sm"></span> Working\\u2026';
+      var attempts = 0;
+      var poll = setInterval(async function() {
+        attempts++;
+        try {
+          var snapRes = await fetch('/api/bump?campaignId=' + encodeURIComponent(campaignId) + '&package=' + encodeURIComponent(packageName));
+          var snap = await snapRes.json();
+          if (attempts > 60) {
+            clearInterval(poll);
+            btn.textContent = 'Timed out';
+            btn.classList.add('apply-done');
+          }
+        } catch (e) {
+          if (attempts > 60) { clearInterval(poll); btn.textContent = 'Error'; }
+        }
+      }, 3000);
+      setTimeout(function() {
+        clearInterval(poll);
+        btn.textContent = 'Applied';
+        btn.classList.add('apply-done');
+      }, 30000);
+    } else {
+      btn.textContent = 'Error';
+    }
+  } catch (e) {
+    console.error(e);
+    btn.disabled = false;
+    btn.textContent = 'Apply fix';
   }
 }
 
@@ -845,7 +890,19 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .finding.affected .finding-loc { color: var(--risk); }
 .finding.ok .finding-loc { color: var(--text-faint); }
 .finding p { line-height: 1.45; }
-.fix-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--safe); margin-top: 0.5rem; margin-bottom: 0.25rem; }
+.fix-row { display: flex; align-items: center; justify-content: space-between; margin-top: 0.5rem; margin-bottom: 0.25rem; }
+.fix-label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--safe); }
+.apply-fix-btn {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.25rem 0.625rem; background: var(--safe-bg); color: var(--safe);
+  border: 1px solid var(--safe); border-radius: var(--radius-sm);
+  font-family: 'Source Sans 3', sans-serif; font-size: 0.6875rem; font-weight: 600;
+  cursor: pointer; transition: background 0.15s, opacity 0.15s;
+}
+.apply-fix-btn:hover { background: var(--safe); color: #fff; }
+.apply-fix-btn:disabled { opacity: 0.6; cursor: default; }
+.apply-fix-btn.apply-done { background: var(--safe-bg); color: var(--safe); border-color: var(--safe); opacity: 0.8; }
+.spinner-sm { width: 10px; height: 10px; border-width: 1.5px; }
 .fp-toggle {
   background: none; border: none; cursor: pointer; padding: 0; margin-top: 0.25rem;
   font-family: 'Source Sans 3', sans-serif; font-size: 0.75rem; font-weight: 600;
@@ -867,9 +924,13 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .code-block {
   font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
   background: var(--surface); border: 1px solid var(--edge); border-radius: 3px;
-  padding: 0.5rem 0.75rem; margin-top: 0.375rem; overflow-x: auto; white-space: pre;
-  color: var(--text);
+  padding: 0.5rem 0.75rem; overflow-x: auto; white-space: pre;
+  color: var(--text); flex: 1; min-width: 0; margin: 0;
 }
+.code-diff { display: flex; gap: 0.5rem; align-items: stretch; margin-top: 0.375rem; }
+.diff-arrow { display: flex; align-items: center; font-size: 1rem; color: var(--text-faint); flex-shrink: 0; }
+.code-before { border-color: var(--risk); border-left: 3px solid var(--risk); }
+.code-after { border-color: var(--safe-text); border-left: 3px solid var(--safe-text); }
 .code-block .hljs-doctag, .code-block .hljs-keyword, .code-block .hljs-meta .hljs-keyword,
 .code-block .hljs-template-tag, .code-block .hljs-template-variable,
 .code-block .hljs-type, .code-block .hljs-variable.language_ { color: #d73a49; }
