@@ -216,7 +216,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
   }
 
   // Re-read after all updates to check if everything is resolved
-  const updated = await updateBumps(active.id, []);
+  const updated = await getCampaign(active.id);
   if (!updated) return;
   const allResolved = updated.plan.every(
     (b) => !b.prNumber || (b.verdict !== 'reanalysing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),

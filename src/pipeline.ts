@@ -2,7 +2,7 @@ import { z } from 'genkit';
 import { ai } from './genkit.js';
 import { listAlerts, getFileContent, getInstallationOctokit } from './tools/github/client.js';
 import { planBumps } from './agents/prioritiser/plan.js';
-import { createCampaign, updateCampaign, updateBumps, findStuckCampaign } from './tools/firestore/client.js';
+import { createCampaign, getCampaign, updateCampaign, updateBumps, findStuckCampaign } from './tools/firestore/client.js';
 import { prepBump, classifyPreparedBump } from './agents/safety/index.js';
 import { clearFileCache } from './agents/safety/usage.js';
 import { createBranchAndPR, postAnalysisReview } from './tools/github/pr.js';
@@ -185,7 +185,7 @@ async function resumeCampaign(
     }
   }));
 
-  const fresh = await updateBumps(campaignId, []);
+  const fresh = await getCampaign(campaignId);
   const currentPlan = fresh?.plan ?? bumps;
   const allResolved = currentPlan.every(
     (b) => !b.prNumber || (b.verdict !== 'reanalysing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
