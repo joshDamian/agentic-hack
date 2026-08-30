@@ -26,6 +26,11 @@ const commitFixTool = ai.defineTool(
     }),
   },
   async ({ owner, repo, branch, filePath, oldCode, newCode, commitMessage }) => {
+    const blocked = ['package.json', 'package-lock.json', 'tsconfig.json'];
+    if (blocked.includes(filePath)) {
+      return { success: false, error: `Editing ${filePath} is not allowed — only fix source files` };
+    }
+
     try {
       const octokit = await getInstallationOctokit();
 
@@ -94,5 +99,6 @@ When asked to apply a fix:
 6. After committing, run runCompileCheck against the PR branch (pass the branch name as ref) to verify the fix compiles. If it fails, read the errors, fix them, and commit again.
 
 If the suggested fix looks wrong or incomplete, say so instead of applying a bad fix.
-If the fix requires changes across multiple files, handle each file in sequence.`,
+If the fix requires changes across multiple files, handle each file in sequence.
+Never edit package.json, package-lock.json, or tsconfig.json — those are managed by the pipeline.`,
 });
