@@ -51,10 +51,15 @@ Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
       const chat = coderAgent.chat();
       const response = await chat.send(prompt);
       message = response.text;
-      const lower = message.toLowerCase();
-      applied = lower.includes('commit') &&
-        !lower.includes('could not') &&
-        !lower.includes('failed');
+
+      applied = response.messages.some((m) =>
+        m.role === 'tool' &&
+        m.content.some(
+          (p) =>
+            p.toolResponse?.name === 'commitFix' &&
+            (p.toolResponse.output as { success?: boolean })?.success === true,
+        ),
+      );
     } catch (err) {
       message = `Agent error: ${err instanceof Error ? err.message : err}`;
     }
