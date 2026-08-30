@@ -111,9 +111,9 @@ async function resumeCampaign(
   clearFileCache();
   await updateCampaign(campaignId, { status: 'analysing' });
 
-  const prepSem = new Semaphore(5);
-  const classifySem = new Semaphore(5);
-  const execSem = new Semaphore(2);
+  const prepSem = new Semaphore(6);
+  const classifySem = new Semaphore(6);
+  const execSem = new Semaphore(4);
   const monitorSem = new Semaphore(3);
 
   async function saveBump(bump: PlannedBump) {
