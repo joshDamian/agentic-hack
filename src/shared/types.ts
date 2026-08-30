@@ -48,6 +48,7 @@ export interface PlannedBump {
     analysis: string;
     originalCode?: string;
     suggestedFix?: string;
+    fixStatus?: 'coding' | 'applied';
   }>;
   prNumber?: number;
   prUrl?: string;

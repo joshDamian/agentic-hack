@@ -403,12 +403,20 @@ function renderDetail(c: Campaign, b: PlannedBump): string {
     html += '<div class="detail-section"><div class="detail-label">Code review</div>';
     for (const f of affected) {
       const findingIdx = b.findings!.indexOf(f);
-      const hasApply = f.suggestedFix && b.prNumber;
+      const hasApply = f.suggestedFix && b.prNumber && f.fixStatus !== 'applied';
       const hasFix = !!(f.originalCode || f.suggestedFix);
+      let applyBtn = '';
+      if (f.fixStatus === 'coding') {
+        applyBtn = `<button class="apply-fix-btn" disabled><span class="spinner spinner-sm"></span> Coding…</button>`;
+      } else if (f.fixStatus === 'applied') {
+        applyBtn = `<button class="apply-fix-btn apply-done" disabled>Applied</button>`;
+      } else if (hasApply) {
+        applyBtn = `<button class="apply-fix-btn" onclick="event.stopPropagation(); applyFix(this, '${esc(c.id)}', '${esc(b.packageName)}', ${findingIdx})">Apply fix</button>`;
+      }
       html += `<div class="finding affected">
         <div class="finding-loc">${esc(f.file)}:${f.line}</div>
         <p>${esc(f.analysis)}</p>
-        ${hasFix ? `<div class="fix-row"><div class="fix-label">${f.originalCode && f.suggestedFix ? 'Before → After' : 'Suggested fix'}</div>${hasApply ? `<button class="apply-fix-btn" onclick="event.stopPropagation(); applyFix(this, '${esc(c.id)}', '${esc(b.packageName)}', ${findingIdx})">Apply fix</button>` : ''}</div><div class="code-diff">${f.originalCode ? `<pre class="code-block code-before">${highlightCode(dedent(f.originalCode), f.file)}</pre>` : ''}${f.originalCode && f.suggestedFix ? '<div class="diff-arrow">→</div>' : ''}${f.suggestedFix ? `<pre class="code-block code-after">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}</div>` : ''}
+        ${hasFix ? `<div class="fix-row"><div class="fix-label">${f.originalCode && f.suggestedFix ? 'Before → After' : 'Suggested fix'}</div>${applyBtn}</div><div class="code-diff">${f.originalCode ? `<pre class="code-block code-before">${highlightCode(dedent(f.originalCode), f.file)}</pre>` : ''}${f.originalCode && f.suggestedFix ? '<div class="diff-arrow">→</div>' : ''}${f.suggestedFix ? `<pre class="code-block code-after">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}</div>` : ''}
       </div>`;
     }
     if (ok.length > 0) {

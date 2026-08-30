@@ -42,18 +42,25 @@ ${finding.suggestedFix ? `**Suggested fix:**\n\`\`\`\n${finding.suggestedFix}\n\
 Read the file first, understand the context around line ${finding.line}, then apply the fix using commitFix.
 Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
 
+    finding.fixStatus = 'coding';
+    await updateCampaign(campaignId, { plan: campaign.plan });
+
     const chat = coderAgent.chat();
     const response = await chat.send(prompt);
 
-    const applied = response.text.toLowerCase().includes('commit') &&
-      !response.text.toLowerCase().includes('could not') &&
-      !response.text.toLowerCase().includes('failed');
+    const text = response.text.toLowerCase();
+    const applied = text.includes('commit') &&
+      !text.includes('could not') &&
+      !text.includes('failed');
 
-    if (applied && finding.suggestedFix) {
+    if (applied) {
       finding.suggestedFix = undefined;
       finding.analysis = `[Fixed] ${finding.analysis}`;
-      await updateCampaign(campaignId, { plan: campaign.plan });
+      finding.fixStatus = 'applied';
+    } else {
+      finding.fixStatus = undefined;
     }
+    await updateCampaign(campaignId, { plan: campaign.plan });
 
     return { success: applied, message: response.text };
   },
