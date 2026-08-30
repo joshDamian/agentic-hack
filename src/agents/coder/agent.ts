@@ -2,7 +2,7 @@ import { z } from 'genkit';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { ai } from '../../genkit.js';
 import { config } from '../../shared/config.js';
-import { readRepoFile, listRepoFiles, searchCodeInRepo } from '../../tools/agent-tools.js';
+import { readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck } from '../../tools/agent-tools.js';
 import { getInstallationOctokit, getFileContent } from '../../tools/github/client.js';
 
 const commitFixTool = ai.defineTool(
@@ -79,8 +79,8 @@ const commitFixTool = ai.defineTool(
 export const coderAgent = ai.defineAgent({
   name: 'codingAssistant',
   model: vertexAI.model(config.classificationModel),
-  tools: [readRepoFile, listRepoFiles, searchCodeInRepo, commitFixTool],
-  maxTurns: 8,
+  tools: [readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck, commitFixTool],
+  maxTurns: 12,
   system: `You are a coding assistant that applies fixes for breaking dependency upgrades.
 
 When asked to apply a fix:
@@ -89,6 +89,7 @@ When asked to apply a fix:
 3. If a suggested fix is provided, verify it makes sense in context. Adapt it if needed.
 4. Use commitFix to apply the change. Make sure oldCode matches the file exactly (whitespace matters).
 5. Write a clear, short commit message.
+6. After committing, run runCompileCheck against the PR branch (pass the branch name as ref) to verify the fix compiles. If it fails, read the errors, fix them, and commit again.
 
 If the suggested fix looks wrong or incomplete, say so instead of applying a bad fix.
 If the fix requires changes across multiple files, handle each file in sequence.`,
