@@ -90,7 +90,17 @@ export const reanalyseFlow = ai.defineFlow(
       ? `depbot-triage/${packageName}-${bump.targetVersion}`
       : undefined;
     console.log(`Re-analysing ${packageName} (was: ${previousVerdict})...`);
-    const result = await classifyBump(campaign.repoOwner, campaign.repoName, bump, branchRef);
+
+    let result;
+    try {
+      result = await classifyBump(campaign.repoOwner, campaign.repoName, bump, branchRef);
+    } catch (err) {
+      await updateBumps(campaignId, [{
+        packageName,
+        fields: { verdict: previousVerdict as any },
+      }]);
+      throw err;
+    }
 
     await updateBumps(campaignId, [{
       packageName,
