@@ -393,10 +393,14 @@ function renderHistory(campaigns: Campaign[]): string {
       const cls = c.status === 'failed' ? ' failed' : '';
       const label = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : c.status;
       const dur = c.startedAt && c.completedAt ? fmtDuration(c.startedAt, c.completedAt) : '—';
+      const safe = c.plan.filter((b) => b.verdict === 'safe').length;
+      const risky = c.plan.filter((b) => b.verdict === 'risky').length;
+      const prs = c.plan.filter((b) => b.prNumber).length;
       return `<div class="history-row">
       <span class="history-repo">${esc(c.repoOwner)}/${esc(c.repoName)}</span>
       <span><span class="history-status${cls}">${label}</span></span>
       <span>${c.plan.length}</span>
+      <span class="history-stats"><span class="mini-safe">${safe}</span><span class="mini-sep">/</span><span class="mini-risky">${risky}</span><span class="mini-sep">/</span><span class="mini-prs">${prs}</span></span>
       <span class="run-duration">${dur}</span>
       <span style="color:var(--text-dim)">${fmtDate(c.createdAt)}</span>
     </div>`;
@@ -407,7 +411,7 @@ function renderHistory(campaigns: Campaign[]): string {
   <div class="history-title">Previous runs</div>
   <div class="history-list">
     <div class="history-row head">
-      <span>Repository</span><span>Status</span><span>Bumps</span><span>Duration</span><span>Date</span>
+      <span>Repository</span><span>Status</span><span>Bumps</span><span title="Safe / Risky / PRs">S / R / PR</span><span>Duration</span><span>Date</span>
     </div>
     ${rows}
   </div>
@@ -1088,7 +1092,7 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
   overflow: hidden; background: var(--surface);
 }
 .history-row {
-  display: grid; grid-template-columns: 2fr 0.8fr 0.6fr 0.7fr 1.2fr; gap: 0.5rem;
+  display: grid; grid-template-columns: 2fr 0.8fr 0.5fr 0.8fr 0.7fr 1.2fr; gap: 0.5rem;
   padding: 0.5rem 0.875rem; font-size: 0.8125rem; align-items: center;
   border-bottom: 1px solid var(--edge);
 }
@@ -1105,6 +1109,11 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
   background: var(--accent-dim); color: var(--accent);
 }
 .history-status.failed { background: var(--risk-bg); color: var(--risk); }
+.history-stats { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; }
+.mini-safe { color: var(--safe); }
+.mini-risky { color: var(--risk); }
+.mini-prs { color: var(--accent); }
+.mini-sep { color: var(--text-faint); margin: 0 0.125rem; }
 
 .empty { text-align: center; padding: 4rem 1.5rem; }
 .empty-icon {
