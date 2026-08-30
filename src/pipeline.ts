@@ -2,7 +2,7 @@ import { z } from 'genkit';
 import { ai } from './genkit.js';
 import { listAlerts, getFileContent, getInstallationOctokit } from './tools/github/client.js';
 import { planBumps } from './agents/prioritiser/plan.js';
-import { createCampaign, updateCampaign, findStuckCampaign } from './tools/firestore/client.js';
+import { createCampaign, updateCampaign, updateBumps, findStuckCampaign } from './tools/firestore/client.js';
 import { prepBump, classifyPreparedBump } from './agents/safety/index.js';
 import { clearFileCache } from './agents/safety/usage.js';
 import { createBranchAndPR, postAnalysisReview } from './tools/github/pr.js';
@@ -116,18 +116,19 @@ async function resumeCampaign(
   const execSem = new Semaphore(2);
   const monitorSem = new Semaphore(3);
 
-  function derivedStatus(): Campaign['status'] {
-    const hasUnanalysed = bumps.some((b) => !b.verdict);
-    const hasPending = bumps.some((b) => b.verdict && !b.prNumber);
-    const hasUnmonitored = bumps.some((b) => b.prNumber && !b.ciStatus?.match(/success|failure|no-checks/));
-    if (hasUnanalysed) return 'analysing';
-    if (hasPending) return 'executing';
-    if (hasUnmonitored) return 'monitoring';
-    return 'monitoring';
-  }
-
-  async function saveBumps() {
-    await updateCampaign(campaignId, { plan: bumps, status: derivedStatus() });
+  async function saveBump(bump: PlannedBump) {
+    await updateBumps(campaignId, [{
+      packageName: bump.packageName,
+      fields: {
+        verdict: bump.verdict,
+        verdictReason: bump.verdictReason,
+        breakingChanges: bump.breakingChanges,
+        findings: bump.findings,
+        prNumber: bump.prNumber,
+        prUrl: bump.prUrl,
+        ciStatus: bump.ciStatus,
+      },
+    }]);
   }
 
   await Promise.all(bumps.map(async (bump) => {
@@ -147,7 +148,7 @@ async function resumeCampaign(
         bump.verdict = 'unknown';
         bump.verdictReason = 'Analysis failed — will retry on next run';
       }
-      await saveBumps();
+      await saveBump(bump);
     }
 
     // --- Execute ---
@@ -162,7 +163,7 @@ async function resumeCampaign(
       } catch (err) {
         console.log(`  PR failed for ${bump.packageName}: ${err instanceof Error ? err.message : err}`);
       }
-      await saveBumps();
+      await saveBump(bump);
     }
 
     // --- Quick CI check (webhook handles the rest) ---
@@ -171,7 +172,7 @@ async function resumeCampaign(
         const { status } = await monitorSem.run(() => getPRCIStatus(owner, repo, bump.prNumber!));
         if (status !== 'pending') {
           bump.ciStatus = status;
-          await saveBumps();
+          await saveBump(bump);
         }
       } catch {}
     }

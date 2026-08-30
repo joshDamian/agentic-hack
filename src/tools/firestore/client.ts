@@ -53,4 +53,22 @@ export function subscribeCampaigns(
   );
 }
 
+export async function updateBumps(
+  campaignId: string,
+  updates: Array<{ packageName: string; fields: Partial<Campaign['plan'][number]> }>,
+): Promise<Campaign | null> {
+  const ref = campaigns.doc(campaignId);
+  return db.runTransaction(async (tx) => {
+    const doc = await tx.get(ref);
+    if (!doc.exists) return null;
+    const campaign = doc.data() as Campaign;
+    for (const { packageName, fields } of updates) {
+      const bump = campaign.plan.find((b) => b.packageName === packageName);
+      if (bump) Object.assign(bump, fields);
+    }
+    tx.update(ref, { plan: campaign.plan, updatedAt: new Date().toISOString() });
+    return campaign;
+  });
+}
+
 export { db };

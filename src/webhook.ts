@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from './shared/config.js';
-import { listCampaigns, updateCampaign } from './tools/firestore/client.js';
+import { listCampaigns, updateBumps, updateCampaign } from './tools/firestore/client.js';
 import { getPRCIStatus, commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
 import { reanalyseWithCIErrors } from './agents/safety/index.js';
-import type { Campaign } from './shared/types.js';
+import type { Campaign, PlannedBump } from './shared/types.js';
 
 export async function webhookHandler(req: Request, res: Response): Promise<void> {
   const event = req.headers['x-github-event'] as string;
@@ -41,7 +41,6 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
 
   res.status(200).send('Processing');
 
-  // Fire and forget — don't block the webhook response
   handleCICompletion(owner, repoName, branches).catch((err) =>
     console.error('Webhook handler error:', err),
   );
@@ -64,7 +63,8 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
   for (const bump of matchedBumps) {
     console.log(`  Webhook: CI completed for ${bump.packageName}, checking status...`);
     const { status, details } = await getPRCIStatus(owner, repoName, bump.prNumber!);
-    bump.ciStatus = status;
+
+    const fields: Partial<PlannedBump> = { ciStatus: status };
 
     if (status === 'success' && bump.verdict === 'safe') {
       await commentOnPR(owner, repoName, bump.prNumber!,
@@ -77,9 +77,9 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
       if (ciErrors) {
         console.log(`  Webhook: Re-analysing ${bump.packageName} with CI errors...`);
         const result = await reanalyseWithCIErrors(owner, repoName, bump, ciErrors);
-        bump.verdict = result.verdict;
-        bump.verdictReason = result.reason;
-        bump.findings = result.findings;
+        fields.verdict = result.verdict;
+        fields.verdictReason = result.reason;
+        fields.findings = result.findings;
         await commentOnPR(owner, repoName, bump.prNumber!,
           `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
       } else {
@@ -87,11 +87,14 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
           `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`);
       }
     }
+
+    await updateBumps(active.id, [{ packageName: bump.packageName, fields }]);
   }
 
-  await updateCampaign(active.id, { plan: active.plan });
-
-  const allResolved = active.plan.every(
+  // Re-read after all updates to check if everything is resolved
+  const updated = await updateBumps(active.id, []);
+  if (!updated) return;
+  const allResolved = updated.plan.every(
     (b) => !b.prNumber || /^(success|failure|no-checks)$/.test(b.ciStatus ?? ''),
   );
   if (allResolved) {
