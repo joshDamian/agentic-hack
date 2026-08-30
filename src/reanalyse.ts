@@ -29,9 +29,9 @@ function buildReanalysisComment(
   }
 
   const newAffected = (newFindings ?? []).filter((f) => f.isAffected);
-  const newAffectedKeys = new Set(newAffected.map((f) => `${f.file}:${f.line}`));
-  const resolved = prevAffected.filter((f) => !newAffectedKeys.has(`${f.file}:${f.line}`));
-  const stillOpen = prevAffected.filter((f) => newAffectedKeys.has(`${f.file}:${f.line}`));
+  const newAffectedFiles = new Set(newAffected.map((f) => f.file));
+  const resolved = prevAffected.filter((f) => !newAffectedFiles.has(f.file));
+  const stillOpen = prevAffected.filter((f) => newAffectedFiles.has(f.file));
 
   if (resolved.length > 0) {
     header += `**Resolved:**\n`;
