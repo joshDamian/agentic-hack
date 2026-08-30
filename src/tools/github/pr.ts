@@ -69,10 +69,15 @@ export async function createBranchAndPR(
   pkgJson[depKey][bump.packageName] = `^${bump.targetVersion}`;
 
   const typesName = `@types/${bump.packageName}`;
-  for (const section of ['devDependencies', 'dependencies'] as const) {
-    if (pkgJson[section]?.[typesName]) {
-      delete pkgJson[section][typesName];
-      console.log(`  Removed stale ${typesName} from ${section}`);
+  const agentFlaggedStale = (bump.findings ?? []).some(
+    (f) => f.file === 'package.json' && f.isAffected && f.analysis.includes(typesName),
+  );
+  if (agentFlaggedStale) {
+    for (const section of ['devDependencies', 'dependencies'] as const) {
+      if (pkgJson[section]?.[typesName]) {
+        delete pkgJson[section][typesName];
+        console.log(`  Removed stale ${typesName} from ${section}`);
+      }
     }
   }
 
