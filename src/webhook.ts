@@ -55,7 +55,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
 
   const matchedBumps = active.plan.filter((b) => {
     const branchName = `depbot-triage/${b.packageName}-${b.targetVersion}`;
-    return branches.includes(branchName) && b.prNumber && b.ciStatus === 'pending';
+    return branches.includes(branchName) && b.prNumber && b.verdict !== 'reanalysing';
   });
 
   if (matchedBumps.length === 0) return;
@@ -63,6 +63,11 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
   for (const bump of matchedBumps) {
     console.log(`  Webhook: CI completed for ${bump.packageName}, checking status...`);
     const { status, details } = await getPRCIStatus(owner, repoName, bump.prNumber!);
+
+    if (status === bump.ciStatus) {
+      console.log(`  Webhook: ${bump.packageName} ciStatus already ${status}, skipping`);
+      continue;
+    }
 
     const fields: Partial<PlannedBump> = { ciStatus: status };
 
