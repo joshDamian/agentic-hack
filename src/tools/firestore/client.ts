@@ -64,7 +64,10 @@ export async function updateBumps(
     const campaign = doc.data() as Campaign;
     for (const { packageName, fields } of updates) {
       const bump = campaign.plan.find((b) => b.packageName === packageName);
-      if (bump) Object.assign(bump, fields);
+      if (!bump) continue;
+      for (const [k, v] of Object.entries(fields)) {
+        if (v !== undefined) (bump as any)[k] = v;
+      }
     }
     tx.update(ref, { plan: campaign.plan, updatedAt: new Date().toISOString() });
     return campaign;
