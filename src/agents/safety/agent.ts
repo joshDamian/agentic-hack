@@ -52,8 +52,9 @@ When you have enough evidence, respond with ONLY a JSON object (no markdown fenc
 }
 
 Verdict rules:
-- "risky" if ANY usage calls a broken/removed/changed API. Cite file:line.
-- "safe" if the code doesn't use any of the changed APIs, or the compile check passes clean.
+- "risky" if the compile check FAILED — this is non-negotiable, type errors mean the build is broken.
+- "risky" if ANY usage calls a broken/removed/changed API, even if it works at runtime but fails type checking. Cite file:line.
+- "safe" only if the compile check passed AND no usage calls a broken API.
 - "unknown" only if you genuinely can't determine the impact.
 
 For findings: isAffected true only if the code will actually break. For affected findings, include originalCode (the exact code from the file that needs changing) and suggestedFix (the corrected version). Skip trivial hits (import statements, type declarations, lines that only mention the package name).`,

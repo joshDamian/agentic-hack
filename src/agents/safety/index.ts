@@ -4,6 +4,7 @@ import { extractBreakingChanges } from './changelog.js';
 import { safetyAgent, verdictSchema } from './agent.js';
 import { getCampaign, updateCampaign } from '../../tools/firestore/client.js';
 import { getFileContent, getInstallationOctokit } from '../../tools/github/client.js';
+import { compileCheck } from '../../tools/npm/compile-check.js';
 import type { BumpVerdict, PlannedBump } from '../../shared/types.js';
 
 export { clearFileCache } from './usage.js';
@@ -11,42 +12,42 @@ export { clearFileCache } from './usage.js';
 const MAX_FILES = 10;
 const MAX_LINES_PER_FILE = 500;
 
-async function gatherCodeContext(
+async function gatherSourceFiles(
   owner: string, repo: string, packageName: string, ref?: string,
-): Promise<string> {
-  let allFiles: string[];
+): Promise<Map<string, string>> {
+  const matched = new Map<string, string>();
   try {
     const octokit = await getInstallationOctokit();
     const { data: tree } = await octokit.rest.git.getTree({
       owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
     });
-    allFiles = tree.tree
+    const allFiles = tree.tree
       .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
       .map((f) => f.path!)
       .filter((p) => p.startsWith('src/'));
-  } catch {
-    return 'Could not list repository files (tree fetch failed).';
-  }
 
-  const matched: Array<{ path: string; content: string }> = [];
-  for (const filePath of allFiles) {
-    if (matched.length >= MAX_FILES) break;
-    try {
-      const content = await getFileContent(owner, repo, filePath, ref);
-      if (content.includes(packageName)) {
-        const lines = content.split('\n');
-        const trimmed = lines.length > MAX_LINES_PER_FILE
-          ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') + `\n... (${lines.length - MAX_LINES_PER_FILE} more lines)`
-          : content;
-        matched.push({ path: filePath, content: trimmed });
-      }
-    } catch {}
-  }
+    for (const filePath of allFiles) {
+      if (matched.size >= MAX_FILES) break;
+      try {
+        const content = await getFileContent(owner, repo, filePath, ref);
+        if (content.includes(packageName)) {
+          matched.set(filePath, content);
+        }
+      } catch {}
+    }
+  } catch {}
+  return matched;
+}
 
-  if (matched.length === 0) return 'No source files import this package.';
-  return matched.map((f) => {
-    const numbered = f.content.split('\n').map((line, i) => `${i + 1} | ${line}`).join('\n');
-    return `--- ${f.path} ---\n${numbered}`;
+function formatCodeContext(files: Map<string, string>): string {
+  if (files.size === 0) return 'No source files import this package.';
+  return [...files.entries()].map(([filePath, content]) => {
+    const lines = content.split('\n');
+    const trimmed = lines.length > MAX_LINES_PER_FILE
+      ? lines.slice(0, MAX_LINES_PER_FILE).join('\n') + `\n... (${lines.length - MAX_LINES_PER_FILE} more lines)`
+      : content;
+    const numbered = trimmed.split('\n').map((line, i) => `${i + 1} | ${line}`).join('\n');
+    return `--- ${filePath} ---\n${numbered}`;
   }).join('\n\n');
 }
 
@@ -85,20 +86,38 @@ export async function classifyBump(
   const to = bump.targetVersion.split('.')[0];
   const isMajor = from !== to;
 
-  const codeContext = await gatherCodeContext(owner, repo, bump.packageName, ref);
+  const sourceFiles = await gatherSourceFiles(owner, repo, bump.packageName, ref);
+  const codeContext = formatCodeContext(sourceFiles);
+
+  let compileSection = '';
+  if (sourceFiles.size > 0) {
+    try {
+      const ccResult = await compileCheck(bump.packageName, bump.targetVersion, sourceFiles);
+      if (!ccResult.ran) {
+        compileSection = '\n\nCompile check: could not run (install failed).';
+      } else if (ccResult.errors.length === 0) {
+        compileSection = '\n\nCompile check against target version: **PASSED** — no type errors.';
+      } else {
+        const errorLines = ccResult.errors.map((e) => `  ${e.file}:${e.line} — ${e.message}`).join('\n');
+        compileSection = `\n\nCompile check against target version: **FAILED** — ${ccResult.errors.length} error(s):\n${errorLines}`;
+      }
+    } catch (err) {
+      compileSection = `\n\nCompile check: error — ${err instanceof Error ? err.message : err}`;
+    }
+  }
 
   const prompt = `Investigate whether upgrading **${bump.packageName}** from ${bump.currentVersion} to ${bump.targetVersion} will break the repository **${owner}/${repo}**.${isMajor ? ` This is a major version bump (${from}.x → ${to}.x) — be extra thorough.` : ''}
 
 Repository: owner="${owner}", repo="${repo}"${ref ? `, ref="${ref}"` : ''}
 Package: ${bump.packageName}
 Current version: ${bump.currentVersion}
-Target version: ${bump.targetVersion}${bcSection}
+Target version: ${bump.targetVersion}${bcSection}${compileSection}
 
 Source files that import ${bump.packageName}:
 
 ${codeContext}
 
-Analyse each file's usage against the breaking changes. Use runCompileCheck or getTypeDiff if you need more evidence.`;
+Analyse each file's usage against the breaking changes. The compile check result above is definitive for type errors — if it failed, the verdict must be "risky". Use getTypeDiff if you need more detail on what changed.`;
 
   let response;
   try {
