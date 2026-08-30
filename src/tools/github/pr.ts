@@ -119,6 +119,7 @@ export async function createBranchAndPR(
     }
 
     for (const [filePath, findingsMap] of byFile) {
+      if (filePath.endsWith('.json')) continue;
       try {
         const content = await getFileContent(owner, repo, filePath);
         const lines = content.split('\n');
@@ -298,6 +299,7 @@ async function pushTodoAnnotations(
 
   const treeEntries: Array<{ path: string; mode: '100644'; type: 'blob'; sha: string }> = [];
   for (const [filePath, findings] of byFile) {
+    if (filePath.endsWith('.json')) continue;
     try {
       const content = await getFileContent(owner, repo, filePath, branch);
       const lines = content.split('\n');
