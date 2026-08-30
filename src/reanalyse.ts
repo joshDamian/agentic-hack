@@ -122,13 +122,17 @@ export const reanalyseFlow = ai.defineFlow(
         bump.prNumber,
         comment,
       );
-      await postAnalysisReview(
-        campaign.repoOwner,
-        campaign.repoName,
-        bump.prNumber,
-        bump,
-        true,
-      );
+      const freshCampaign = await getCampaign(campaignId);
+      const freshBump = freshCampaign?.plan.find((b) => b.packageName === packageName);
+      if (freshBump) {
+        await postAnalysisReview(
+          campaign.repoOwner,
+          campaign.repoName,
+          bump.prNumber,
+          freshBump,
+          true,
+        );
+      }
     }
 
     return {

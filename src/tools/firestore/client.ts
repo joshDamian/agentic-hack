@@ -75,6 +75,7 @@ export async function updateBumps(
       }
       for (const [k, v] of Object.entries(fields)) {
         if (v !== undefined) (bump as any)[k] = v;
+        else delete (bump as any)[k];
       }
     }
     tx.update(ref, { plan: campaign.plan, updatedAt: new Date().toISOString() });

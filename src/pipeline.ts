@@ -179,7 +179,10 @@ async function resumeCampaign(
         const { status } = await monitorSem.run(() => getPRCIStatus(owner, repo, bump.prNumber!));
         if (status !== 'pending') {
           bump.ciStatus = status;
-          await saveBump(bump);
+          await updateBumps(campaignId, [{
+            packageName: bump.packageName,
+            fields: { ciStatus: status },
+          }]);
         }
       } catch {}
     }
