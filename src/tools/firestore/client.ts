@@ -74,4 +74,26 @@ export async function updateBumps(
   });
 }
 
+export async function updateFinding(
+  campaignId: string,
+  packageName: string,
+  findingIndex: number,
+  fields: Partial<NonNullable<Campaign['plan'][number]['findings']>[number]>,
+): Promise<void> {
+  const ref = campaigns.doc(campaignId);
+  await db.runTransaction(async (tx) => {
+    const doc = await tx.get(ref);
+    if (!doc.exists) return;
+    const campaign = doc.data() as Campaign;
+    const bump = campaign.plan.find((b) => b.packageName === packageName);
+    const finding = bump?.findings?.[findingIndex];
+    if (!finding) return;
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== undefined) (finding as any)[k] = v;
+      else delete (finding as any)[k];
+    }
+    tx.update(ref, { plan: campaign.plan, updatedAt: new Date().toISOString() });
+  });
+}
+
 export { db };

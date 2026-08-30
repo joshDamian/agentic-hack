@@ -1,7 +1,7 @@
 import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { coderAgent } from './agent.js';
-import { getCampaign, updateCampaign } from '../../tools/firestore/client.js';
+import { getCampaign, updateFinding } from '../../tools/firestore/client.js';
 
 export const applyFixFlow = ai.defineFlow(
   {
@@ -42,8 +42,7 @@ ${finding.suggestedFix ? `**Suggested fix:**\n\`\`\`\n${finding.suggestedFix}\n\
 Read the file first, understand the context around line ${finding.line}, then apply the fix using commitFix.
 Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
 
-    finding.fixStatus = 'coding';
-    await updateCampaign(campaignId, { plan: campaign.plan });
+    await updateFinding(campaignId, packageName, findingIndex, { fixStatus: 'coding' });
 
     let applied = false;
     let message = '';
@@ -65,13 +64,16 @@ Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
     }
 
     if (applied) {
-      finding.suggestedFix = undefined;
-      finding.analysis = `[Fixed] ${finding.analysis}`;
-      finding.fixStatus = 'applied';
+      await updateFinding(campaignId, packageName, findingIndex, {
+        fixStatus: 'applied',
+        analysis: `[Fixed] ${finding.analysis}`,
+        suggestedFix: undefined,
+      });
     } else {
-      finding.fixStatus = undefined;
+      await updateFinding(campaignId, packageName, findingIndex, {
+        fixStatus: undefined,
+      });
     }
-    await updateCampaign(campaignId, { plan: campaign.plan });
 
     return { success: applied, message };
   },

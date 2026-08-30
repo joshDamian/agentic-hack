@@ -561,7 +561,6 @@ async function triggerRun(fresh) {
 async function reanalyse(btn, campaignId, packageName) {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Re-analysing\\u2026';
-  location.hash = 'pkg-' + packageName;
   try {
     await fetch('/reanalyse', {
       method: 'POST',
@@ -633,21 +632,6 @@ function updateCountdown() {
 updateCountdown();
 setInterval(updateCountdown, 60000);
 
-function openFromHash() {
-  var hash = location.hash;
-  if (!hash || !hash.startsWith('#pkg-')) return;
-  var pkg = decodeURIComponent(hash.slice(5));
-  var rows = document.querySelectorAll('.bump-row[data-pkg]');
-  for (var i = 0; i < rows.length; i++) {
-    if (rows[i].getAttribute('data-pkg') === pkg) {
-      rows[i].classList.add('open');
-      rows[i].nextElementSibling.classList.add('open');
-      rows[i].scrollIntoView({ block: 'center', behavior: 'smooth' });
-      break;
-    }
-  }
-}
-openFromHash();
 `;
 }
 
