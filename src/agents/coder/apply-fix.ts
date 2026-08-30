@@ -45,13 +45,19 @@ Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
     finding.fixStatus = 'coding';
     await updateCampaign(campaignId, { plan: campaign.plan });
 
-    const chat = coderAgent.chat();
-    const response = await chat.send(prompt);
-
-    const text = response.text.toLowerCase();
-    const applied = text.includes('commit') &&
-      !text.includes('could not') &&
-      !text.includes('failed');
+    let applied = false;
+    let message = '';
+    try {
+      const chat = coderAgent.chat();
+      const response = await chat.send(prompt);
+      message = response.text;
+      const lower = message.toLowerCase();
+      applied = lower.includes('commit') &&
+        !lower.includes('could not') &&
+        !lower.includes('failed');
+    } catch (err) {
+      message = `Agent error: ${err instanceof Error ? err.message : err}`;
+    }
 
     if (applied) {
       finding.suggestedFix = undefined;
@@ -62,6 +68,6 @@ Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
     }
     await updateCampaign(campaignId, { plan: campaign.plan });
 
-    return { success: applied, message: response.text };
+    return { success: applied, message };
   },
 );

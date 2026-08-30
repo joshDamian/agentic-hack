@@ -67,6 +67,15 @@ export async function createBranchAndPR(
   if (!depKey) throw new Error(`${bump.packageName} not found in package.json`);
 
   pkgJson[depKey][bump.packageName] = `^${bump.targetVersion}`;
+
+  const typesName = `@types/${bump.packageName}`;
+  for (const section of ['devDependencies', 'dependencies'] as const) {
+    if (pkgJson[section]?.[typesName]) {
+      delete pkgJson[section][typesName];
+      console.log(`  Removed stale ${typesName} from ${section}`);
+    }
+  }
+
   const updatedContent = JSON.stringify(pkgJson, null, 2) + '\n';
 
   const treeEntries: Array<{ path: string; mode: '100644'; type: 'blob'; sha: string }> = [];
