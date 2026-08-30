@@ -7,6 +7,9 @@ import { reanalyseWithCIErrors } from './agents/safety/index.js';
 import type { Campaign } from './shared/types.js';
 
 export async function webhookHandler(req: Request, res: Response): Promise<void> {
+  const event = req.headers['x-github-event'] as string;
+  console.log(`Webhook received: ${event} / ${req.body?.action ?? 'no action'}`);
+
   if (!verifySignature(req)) {
     res.status(401).send('Invalid signature');
     return;
