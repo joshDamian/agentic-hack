@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { config } from './shared/config.js';
 import { listCampaigns, updateBumps, updateCampaign } from './tools/firestore/client.js';
 import { getPRCIStatus, commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
-import { reanalyseWithCIErrors } from './agents/safety/index.js';
+import { classifyBump, reanalyseWithCIErrors } from './agents/safety/index.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
 
 export async function webhookHandler(req: Request, res: Response): Promise<void> {
@@ -64,14 +64,33 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
     console.log(`  Webhook: CI completed for ${bump.packageName}, checking status...`);
     const { status, details } = await getPRCIStatus(owner, repoName, bump.prNumber!);
 
-    if (status === bump.ciStatus && status !== 'failure') {
+    const statusChanged = status !== bump.ciStatus;
+    const needsReanalysis = status === 'failure' || (status === 'success' && bump.verdict !== 'safe');
+    if (!statusChanged && !needsReanalysis) {
       console.log(`  Webhook: ${bump.packageName} ciStatus already ${status}, skipping`);
       continue;
     }
 
     const fields: Partial<PlannedBump> = { ciStatus: status };
 
-    if (status === 'success' && bump.verdict === 'safe') {
+    if (status === 'success' && bump.verdict !== 'safe') {
+      console.log(`  Webhook: CI passing for ${bump.packageName} but verdict is ${bump.verdict}, re-analysing...`);
+      const prevVerdict = bump.verdict;
+      const branchRef = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
+      await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
+      try {
+        const result = await classifyBump(owner, repoName, bump, branchRef);
+        fields.verdict = result.verdict;
+        fields.verdictReason = result.reason;
+        fields.breakingChanges = result.breakingChanges;
+        fields.findings = result.findings;
+        await commentOnPR(owner, repoName, bump.prNumber!,
+          `✅ **CI passed.** Re-analysed — verdict updated to **${result.verdict}**.`);
+      } catch (err) {
+        fields.verdict = prevVerdict;
+        console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
+      }
+    } else if (status === 'success' && bump.verdict === 'safe') {
       await commentOnPR(owner, repoName, bump.prNumber!,
         '✅ **CI passed** and safety analysis says this bump is safe.\n\n**Ready to merge.**');
     }
