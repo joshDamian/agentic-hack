@@ -10,6 +10,7 @@ import { pipelineFlow } from './pipeline.js';
 import { reanalyseFlow } from './reanalyse.js';
 import { applyFixFlow } from './agents/coder/apply-fix.js';
 import { dashboardHandler, dashboardPartialHandler } from './dashboard.js';
+import { webhookHandler } from './webhook.js';
 import { config } from './shared/config.js';
 import { listInstallationRepos } from './tools/github/client.js';
 import { listCampaigns, getCampaign, subscribeCampaigns } from './tools/firestore/client.js';
@@ -117,6 +118,7 @@ app.post('/prioritise', expressHandler(prioritiseFlow));
 app.post('/analyse', expressHandler(safetyAnalyserFlow));
 app.post('/execute', expressHandler(executorFlow));
 app.post('/monitor', expressHandler(monitorFlow));
+app.post('/webhook', webhookHandler);
 app.get('/healthz', (_req, res) => { res.send('ok'); });
 
 const port = Number(process.env.PORT ?? 8080);

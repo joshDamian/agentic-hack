@@ -44,6 +44,48 @@ export async function getPRCIStatus(
   return { status: 'success', details: 'All checks passed' };
 }
 
+export async function getCIFailureLogs(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<string> {
+  const octokit = await getInstallationOctokit();
+  const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+  const headSha = pr.head.sha;
+
+  const { data: checkRuns } = await octokit.rest.checks.listForRef({ owner, repo, ref: headSha });
+  const failed = checkRuns.check_runs.filter((r) => r.conclusion === 'failure');
+  if (failed.length === 0) return '';
+
+  const lines: string[] = [];
+
+  for (const run of failed) {
+    lines.push(`=== ${run.name} ===`);
+
+    // Try annotations first (structured errors)
+    try {
+      const { data: annotations } = await octokit.rest.checks.listAnnotations({
+        owner, repo, check_run_id: run.id,
+      });
+      if (annotations.length > 0) {
+        for (const a of annotations.slice(0, 20)) {
+          lines.push(`${a.path}:${a.start_line} [${a.annotation_level}] ${a.message}`);
+        }
+        continue;
+      }
+    } catch {}
+
+    // Fall back to output summary
+    if (run.output?.summary) {
+      lines.push(run.output.summary.slice(0, 2000));
+    } else if (run.output?.text) {
+      lines.push(run.output.text.slice(0, 2000));
+    }
+  }
+
+  return lines.join('\n');
+}
+
 export async function commentOnPR(
   owner: string,
   repo: string,

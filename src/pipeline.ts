@@ -6,7 +6,7 @@ import { createCampaign, updateCampaign, findStuckCampaign } from './tools/fires
 import { prepBump, classifyPreparedBump } from './agents/safety/index.js';
 import { clearFileCache } from './agents/safety/usage.js';
 import { createBranchAndPR, postAnalysisReview } from './tools/github/pr.js';
-import { getPRCIStatus, commentOnPR } from './tools/github/ci.js';
+import { getPRCIStatus } from './tools/github/ci.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
 import { Semaphore } from './shared/concurrency.js';
 import { clearSnapshots } from './tools/github/zipball.js';
@@ -165,25 +165,26 @@ async function resumeCampaign(
       await saveBumps();
     }
 
-    // --- Monitor ---
-    if (bump.prNumber) {
+    // --- Quick CI check (webhook handles the rest) ---
+    if (bump.prNumber && bump.ciStatus === 'pending') {
       try {
-        const { status, details } = await monitorSem.run(() => getPRCIStatus(owner, repo, bump.prNumber!));
-        bump.ciStatus = status;
-        if (status === 'success' && bump.verdict === 'safe') {
-          await monitorSem.run(() => commentOnPR(owner, repo, bump.prNumber!, '✅ **CI passed** and safety analysis says this bump is safe.\n\n**Ready to merge.**'));
+        const { status } = await monitorSem.run(() => getPRCIStatus(owner, repo, bump.prNumber!));
+        if (status !== 'pending') {
+          bump.ciStatus = status;
+          await saveBumps();
         }
-        if (status === 'failure') {
-          await monitorSem.run(() => commentOnPR(owner, repo, bump.prNumber!, `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`));
-        }
-      } catch (err) {
-        console.log(`  Monitor failed for ${bump.packageName}: ${err instanceof Error ? err.message : err}`);
-      }
-      await saveBumps();
+      } catch {}
     }
   }));
 
-  await updateCampaign(campaignId, { status: 'done', completedAt: new Date().toISOString() });
+  const allResolved = bumps.every(
+    (b) => !b.prNumber || /^(success|failure|no-checks)$/.test(b.ciStatus ?? ''),
+  );
+  if (allResolved) {
+    await updateCampaign(campaignId, { status: 'done', completedAt: new Date().toISOString() });
+  } else {
+    await updateCampaign(campaignId, { status: 'monitoring' });
+  }
 
   clearSnapshots();
 

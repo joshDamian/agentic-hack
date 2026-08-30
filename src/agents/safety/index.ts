@@ -157,10 +157,16 @@ Analyse each file's usage against the breaking changes. The compile check result
     }
   }
 
+  return parseAgentResponse(response.text, bcData);
+}
+
+function parseAgentResponse(
+  responseText: string,
+  bcData: NonNullable<PlannedBump['breakingChanges']>,
+): ClassificationResult {
   let result: z.infer<typeof verdictSchema> | null = null;
-  const text = response.text;
-  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) ?? text.match(/(\{[\s\S]*\})/);
-  const raw = jsonMatch?.[1]?.trim() ?? text.trim();
+  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/) ?? responseText.match(/(\{[\s\S]*\})/);
+  const raw = jsonMatch?.[1]?.trim() ?? responseText.trim();
   try {
     result = verdictSchema.parse(JSON.parse(raw));
   } catch {
@@ -195,6 +201,53 @@ export async function classifyBump(
 ): Promise<ClassificationResult> {
   const prep = await prepBump(owner, repo, bump, ref);
   return classifyPreparedBump(owner, repo, bump, prep, ref);
+}
+
+export async function reanalyseWithCIErrors(
+  owner: string,
+  repo: string,
+  bump: PlannedBump,
+  ciErrors: string,
+): Promise<ClassificationResult> {
+  const branchName = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
+  const sourceFiles = await gatherSourceFiles(owner, repo, bump.packageName, branchName);
+  const codeContext = formatCodeContext(sourceFiles);
+
+  const previousFindings = (bump.findings ?? [])
+    .filter((f) => f.isAffected)
+    .map((f) => `- ${f.file}:${f.line} — ${f.analysis}`)
+    .join('\n');
+
+  const prompt = `Re-analyse the upgrade of **${bump.packageName}** from ${bump.currentVersion} to ${bump.targetVersion} in **${owner}/${repo}**.
+
+The previous analysis marked this bump as "${bump.verdict}", but **CI failed** on the PR branch. The CI errors below are the ground truth — the build is broken.
+
+CI error output:
+\`\`\`
+${ciErrors}
+\`\`\`
+
+${previousFindings ? `Previous findings:\n${previousFindings}\n` : ''}
+Source files on the PR branch (${branchName}):
+
+${codeContext}
+
+Based on the CI errors, identify every affected file and line. The verdict must be "risky" since CI failed. For each affected finding, include originalCode (the exact code from the file) and suggestedFix (the corrected code).`;
+
+  let response;
+  try {
+    const chat = safetyAgent.chat();
+    response = await chat.send(prompt);
+  } catch (err: any) {
+    if (err?.status === 'ABORTED' && err?.details?.response) {
+      const partial = err.details.response;
+      response = { text: partial.text?.() ?? partial.message?.text?.() ?? '' };
+    } else {
+      throw err;
+    }
+  }
+
+  return parseAgentResponse(response.text, bump.breakingChanges ?? []);
 }
 
 export const safetyAnalyserFlow = ai.defineFlow(
