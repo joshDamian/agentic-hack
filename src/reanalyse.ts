@@ -1,6 +1,6 @@
 import { z } from 'genkit';
 import { ai } from './genkit.js';
-import { getCampaign, updateBumps } from './tools/firestore/client.js';
+import { getCampaign, updateBumps, setReanalysing, clearReanalysing } from './tools/firestore/client.js';
 import { classifyBump } from './agents/safety/index.js';
 import { postAnalysisReview } from './tools/github/pr.js';
 import { commentOnPR } from './tools/github/ci.js';
@@ -78,49 +78,41 @@ export const reanalyseFlow = ai.defineFlow(
     const bump = campaign.plan.find((b) => b.packageName === packageName);
     if (!bump) throw new Error(`Package ${packageName} not in campaign plan`);
 
-    const previousVerdict = bump.verdict ?? 'none';
     const previousFindings = (bump.findings ?? []).filter((f) => f.isAffected);
 
-    await updateBumps(campaignId, [{
-      packageName,
-      fields: { verdict: 'reanalysing' },
-    }]);
+    const prevVerdict = await setReanalysing(campaignId, packageName);
+    if (prevVerdict === null) {
+      throw new Error(`${packageName} is locked by another operation (fix in progress or already re-analysing)`);
+    }
 
     const branchRef = bump.prNumber
       ? `depbot-triage/${packageName}-${bump.targetVersion}`
       : undefined;
-    console.log(`Re-analysing ${packageName} (was: ${previousVerdict})...`);
+    console.log(`Re-analysing ${packageName} (was: ${prevVerdict})...`);
 
     let result;
     try {
       result = await classifyBump(campaign.repoOwner, campaign.repoName, bump, branchRef);
     } catch (err) {
-      await updateBumps(campaignId, [{
-        packageName,
-        fields: { verdict: previousVerdict as any },
-      }]);
+      await clearReanalysing(campaignId, packageName, prevVerdict);
       throw err;
     }
 
-    const mergedFindings = (result.findings ?? []).map((f) => {
-      const prev = (bump.findings ?? []).find((o) => o.file === f.file && o.line === f.line);
-      if (prev?.fixStatus) return { ...f, fixStatus: prev.fixStatus };
-      return f;
-    });
-
     await updateBumps(campaignId, [{
       packageName,
+      mergeNewFindings: true,
       fields: {
         verdict: result.verdict,
         verdictReason: result.reason,
         breakingChanges: result.breakingChanges,
-        findings: mergedFindings,
+        findings: result.findings ?? [],
+        reanalysingAt: undefined,
       },
     }]);
 
     if (bump.prNumber) {
       const comment = buildReanalysisComment(
-        previousVerdict, result.verdict, result.reason,
+        prevVerdict, result.verdict, result.reason,
         previousFindings, result.findings ?? [],
       );
 
@@ -141,7 +133,7 @@ export const reanalyseFlow = ai.defineFlow(
 
     return {
       packageName,
-      previousVerdict,
+      previousVerdict: prevVerdict,
       newVerdict: result.verdict,
       reason: result.reason,
       prNumber: bump.prNumber,

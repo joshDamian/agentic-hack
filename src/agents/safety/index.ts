@@ -4,7 +4,7 @@ import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { extractBreakingChanges } from './changelog.js';
 import { safetyAgent, verdictSchema } from './agent.js';
-import { getCampaign, updateCampaign } from '../../tools/firestore/client.js';
+import { getCampaign, updateCampaign, updateBumps } from '../../tools/firestore/client.js';
 import { compileCheck } from '../../tools/npm/compile-check.js';
 import { getRepoSnapshot } from '../../tools/github/zipball.js';
 import type { BumpVerdict, PlannedBump } from '../../shared/types.js';
@@ -131,6 +131,13 @@ export async function classifyPreparedBump(
   const from = bump.currentVersion.split('.')[0];
   const to = bump.targetVersion.split('.')[0];
 
+  const previousAffected = (bump.findings ?? []).filter((f) => f.isAffected);
+  let previousSection = '';
+  if (ref && previousAffected.length > 0) {
+    const items = previousAffected.map((f) => `- ${f.file}:${f.line} — ${f.analysis}`).join('\n');
+    previousSection = `\n\nA previous analysis flagged these locations as affected:\n${items}\n\nFixes may have been applied since. Check whether the current code (shown above) still has these problems — if a previously-flagged issue is resolved, mark it isAffected: false.`;
+  }
+
   const prompt = `Investigate whether upgrading **${bump.packageName}** from ${bump.currentVersion} to ${bump.targetVersion} will break the repository **${owner}/${repo}**.${isMajor ? ` This is a major version bump (${from}.x → ${to}.x) — be extra thorough.` : ''}
 
 Repository: owner="${owner}", repo="${repo}"${ref ? `, ref="${ref}"` : ''}
@@ -141,7 +148,7 @@ Target version: ${bump.targetVersion}${bcSection}${compileSection}
 Source files that import ${bump.packageName}:
 
 ${codeContext}
-
+${previousSection}
 Analyse each file's usage against the breaking changes. The compile check result above is definitive for type errors — if it failed, the verdict must be "risky". Use getTypeDiff if you need more detail on what changed.`;
 
   let response;
@@ -282,7 +289,15 @@ export const safetyAnalyserFlow = ai.defineFlow(
       bump.breakingChanges = result.breakingChanges;
       bump.findings = result.findings;
       results.push({ packageName: bump.packageName, verdict: result.verdict, reason: result.reason });
-      await updateCampaign(campaignId, { plan: campaign.plan });
+      await updateBumps(campaignId, [{
+        packageName: bump.packageName,
+        fields: {
+          verdict: result.verdict,
+          verdictReason: result.reason,
+          breakingChanges: result.breakingChanges,
+          findings: result.findings,
+        },
+      }]);
     }
 
     return { campaignId, results };

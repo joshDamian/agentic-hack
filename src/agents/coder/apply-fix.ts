@@ -2,10 +2,7 @@ import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { coderAgent } from './agent.js';
 import { getCampaign, updateCampaign, updateFinding, updateBumps } from '../../tools/firestore/client.js';
-import { getPRCIStatus } from '../../tools/github/ci.js';
-
-const CI_POLL_DELAY = 30_000;
-const CI_POLL_ATTEMPTS = 6;
+import { getFileContent } from '../../tools/github/client.js';
 
 export const applyFixFlow = ai.defineFlow(
   {
@@ -65,13 +62,14 @@ Read each affected file, apply all fixes, then commit. You can make multiple com
     }
 
     let appliedCount = 0;
+    let commitCount = 0;
     let message = '';
     try {
       const chat = coderAgent.chat();
       const response = await chat.send(prompt);
       message = response.text;
 
-      const commitCount = response.messages.filter((m) =>
+      commitCount = response.messages.filter((m) =>
         m.role === 'tool' &&
         m.content.some(
           (p) =>
@@ -79,20 +77,42 @@ Read each affected file, apply all fixes, then commit. You can make multiple com
             (p.toolResponse.output as { success?: boolean })?.success === true,
         ),
       ).length;
-
-      appliedCount = commitCount > 0 ? targets.length : 0;
     } catch (err) {
       message = `Agent error: ${err instanceof Error ? err.message : err}`;
     }
 
-    if (appliedCount > 0) {
+    if (commitCount > 0) {
       for (const { index, finding } of targets) {
-        await updateFinding(campaignId, packageName, index, {
-          fixStatus: 'applied',
-          analysis: `[Fixed] ${finding!.analysis}`,
-          suggestedFix: undefined,
-        });
+        const f = finding!;
+        let verified = false;
+        if (f.originalCode) {
+          try {
+            const content = await getFileContent(owner, repo, f.file, branchName);
+            verified = !content.includes(f.originalCode);
+          } catch {
+            verified = true;
+          }
+        } else {
+          verified = true;
+        }
+        if (verified) {
+          appliedCount++;
+          await updateFinding(campaignId, packageName, index, {
+            fixStatus: 'applied',
+            analysis: `[Fixed] ${f.analysis}`,
+            suggestedFix: undefined,
+          });
+        } else {
+          await updateFinding(campaignId, packageName, index, { fixStatus: undefined });
+        }
       }
+    } else {
+      for (const { index } of targets) {
+        await updateFinding(campaignId, packageName, index, { fixStatus: undefined });
+      }
+    }
+
+    if (appliedCount > 0) {
       await updateBumps(campaignId, [{
         packageName,
         fields: { ciStatus: 'pending', fixAttempts: (bump.fixAttempts ?? 0) + 1 },
@@ -101,37 +121,8 @@ Read each affected file, apply all fixes, then commit. You can make multiple com
       if (latest && latest.status === 'done') {
         await updateCampaign(campaignId, { status: 'iterating' });
       }
-
-      pollCIAfterFix(campaignId, owner, repo, bump.prNumber!, packageName).catch((err) =>
-        console.error(`CI poll error for ${packageName}:`, err),
-      );
-    } else {
-      for (const { index } of targets) {
-        await updateFinding(campaignId, packageName, index, {
-          fixStatus: undefined,
-        });
-      }
     }
 
     return { success: appliedCount > 0, message, applied: appliedCount, total: targets.length };
   },
 );
-
-async function pollCIAfterFix(
-  campaignId: string,
-  owner: string,
-  repo: string,
-  prNumber: number,
-  packageName: string,
-): Promise<void> {
-  for (let i = 0; i < CI_POLL_ATTEMPTS; i++) {
-    await new Promise((r) => setTimeout(r, CI_POLL_DELAY));
-    const { status } = await getPRCIStatus(owner, repo, prNumber);
-    if (status !== 'pending') {
-      console.log(`  Post-fix CI poll: ${packageName} → ${status}`);
-      await updateBumps(campaignId, [{ packageName, fields: { ciStatus: status } }]);
-      return;
-    }
-  }
-  console.log(`  Post-fix CI poll: ${packageName} still pending after ${CI_POLL_ATTEMPTS} attempts`);
-}

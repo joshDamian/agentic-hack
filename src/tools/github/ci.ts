@@ -6,7 +6,7 @@ export async function getPRCIStatus(
   owner: string,
   repo: string,
   prNumber: number,
-): Promise<{ status: CIStatus; details: string }> {
+): Promise<{ status: CIStatus; details: string; headSha: string }> {
   const octokit = await getInstallationOctokit();
 
   const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
@@ -20,10 +20,11 @@ export async function getPRCIStatus(
     const { data: statuses } = await octokit.rest.repos.getCombinedStatusForRef({
       owner, repo, ref: headSha,
     });
-    if (statuses.total_count === 0) return { status: 'no-checks', details: 'No CI checks configured' };
+    if (statuses.total_count === 0) return { status: 'no-checks', details: 'No CI checks configured', headSha };
     return {
       status: statuses.state === 'success' ? 'success' : statuses.state === 'pending' ? 'pending' : 'failure',
       details: statuses.statuses.map((s) => `${s.context}: ${s.state}`).join(', '),
+      headSha,
     };
   }
 
@@ -31,17 +32,18 @@ export async function getPRCIStatus(
   const pending = checkRuns.check_runs.filter((r) => r.status !== 'completed');
 
   if (pending.length > 0) {
-    return { status: 'pending', details: `${pending.length} checks still running` };
+    return { status: 'pending', details: `${pending.length} checks still running`, headSha };
   }
 
   if (failed.length > 0) {
     return {
       status: 'failure',
       details: failed.map((r) => `${r.name}: ${r.conclusion}`).join(', '),
+      headSha,
     };
   }
 
-  return { status: 'success', details: 'All checks passed' };
+  return { status: 'success', details: 'All checks passed', headSha };
 }
 
 export async function getCIFailureLogs(

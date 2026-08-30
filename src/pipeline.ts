@@ -11,13 +11,17 @@ import type { Campaign, PlannedBump } from './shared/types.js';
 import { Semaphore } from './shared/concurrency.js';
 import { clearSnapshots } from './tools/github/zipball.js';
 
-async function reconcilePRs(owner: string, repo: string, bumps: PlannedBump[]): Promise<number> {
+async function reconcilePRs(
+  owner: string,
+  repo: string,
+  bumps: PlannedBump[],
+): Promise<Array<{ packageName: string; fields: Partial<PlannedBump> }>> {
   const octokit = await getInstallationOctokit();
   const { data: prs } = await octokit.rest.pulls.list({
     owner, repo, state: 'open', per_page: 100,
   });
 
-  let reconciled = 0;
+  const updates: Array<{ packageName: string; fields: Partial<PlannedBump> }> = [];
   for (const bump of bumps) {
     if (bump.prNumber) continue;
     const branchName = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
@@ -26,10 +30,13 @@ async function reconcilePRs(owner: string, repo: string, bumps: PlannedBump[]): 
       bump.prNumber = match.number;
       bump.prUrl = match.html_url;
       bump.ciStatus = bump.ciStatus ?? 'pending';
-      reconciled++;
+      updates.push({
+        packageName: bump.packageName,
+        fields: { prNumber: match.number, prUrl: match.html_url, ciStatus: bump.ciStatus },
+      });
     }
   }
-  return reconciled;
+  return updates;
 }
 
 export const pipelineFlow = ai.defineFlow(
@@ -59,10 +66,10 @@ export const pipelineFlow = ai.defineFlow(
     const stuck = fresh ? null : await findStuckCampaign(owner, repo);
     if (stuck) {
       console.log(`Resuming stuck campaign ${stuck.id} (status: ${stuck.status})`);
-      const reconciled = await reconcilePRs(owner, repo, stuck.plan);
-      if (reconciled > 0) {
-        console.log(`  Reconciled ${reconciled} existing PRs from GitHub`);
-        await updateCampaign(stuck.id, { plan: stuck.plan });
+      const reconcileUpdates = await reconcilePRs(owner, repo, stuck.plan);
+      if (reconcileUpdates.length > 0) {
+        console.log(`  Reconciled ${reconcileUpdates.length} existing PRs from GitHub`);
+        await updateBumps(stuck.id, reconcileUpdates);
       }
       return resumeCampaign(stuck, owner, repo, dryRun);
     }
@@ -178,8 +185,10 @@ async function resumeCampaign(
     }
   }));
 
-  const allResolved = bumps.every(
-    (b) => !b.prNumber || /^(success|failure|no-checks)$/.test(b.ciStatus ?? ''),
+  const fresh = await updateBumps(campaignId, []);
+  const currentPlan = fresh?.plan ?? bumps;
+  const allResolved = currentPlan.every(
+    (b) => !b.prNumber || (b.verdict !== 'reanalysing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
   );
   if (allResolved) {
     await updateCampaign(campaignId, { status: 'done', completedAt: new Date().toISOString() });

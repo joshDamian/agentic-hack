@@ -1,26 +1,15 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from './shared/config.js';
-import { listCampaigns, updateBumps, updateCampaign } from './tools/firestore/client.js';
+import { getCampaign, listCampaigns, updateBumps, updateCampaign, setReanalysing, clearReanalysing } from './tools/firestore/client.js';
 import { getPRCIStatus, commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
 import { getInstallationOctokit } from './tools/github/client.js';
 import { classifyBump, reanalyseWithCIErrors } from './agents/safety/index.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
 
 const MAX_FIX_ATTEMPTS = 5;
-
-function mergeFixStatus(
-  oldFindings: PlannedBump['findings'],
-  newFindings: PlannedBump['findings'],
-): PlannedBump['findings'] {
-  if (!newFindings) return newFindings;
-  if (!oldFindings?.length) return newFindings;
-  return newFindings.map((f) => {
-    const prev = oldFindings.find((o) => o.file === f.file && o.line === f.line);
-    if (prev?.fixStatus) return { ...f, fixStatus: prev.fixStatus };
-    return f;
-  });
-}
+const FIXING_WAIT_INTERVAL = 10_000;
+const FIXING_MAX_WAIT = 5 * 60_000;
 
 async function getBranchCommitHistory(owner: string, repo: string, branch: string, limit = 10): Promise<string> {
   try {
@@ -56,9 +45,9 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
   const owner = repo.owner.login as string;
   const repoName = repo.name as string;
 
-  const branches: string[] = event === 'check_suite'
-    ? (payload.check_suite.pull_requests ?? []).map((pr: any) => pr.head.ref as string)
-    : (payload.check_run.pull_requests ?? []).map((pr: any) => pr.head.ref as string);
+  const suiteOrRun = event === 'check_suite' ? payload.check_suite : payload.check_run;
+  const webhookSha = suiteOrRun.head_sha as string;
+  const branches: string[] = (suiteOrRun.pull_requests ?? []).map((pr: any) => pr.head.ref as string);
 
   if (branches.length === 0) {
     res.status(200).send('No PR branches');
@@ -67,12 +56,37 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
 
   res.status(200).send('Processing');
 
-  handleCICompletion(owner, repoName, branches).catch((err) =>
+  handleCICompletion(owner, repoName, branches, webhookSha).catch((err) =>
     console.error('Webhook handler error:', err),
   );
 }
 
-async function handleCICompletion(owner: string, repoName: string, branches: string[]): Promise<void> {
+async function waitForFixCompletion(campaignId: string, packageName: string): Promise<PlannedBump | null> {
+  const deadline = Date.now() + FIXING_MAX_WAIT;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, FIXING_WAIT_INTERVAL));
+    const campaign = await getCampaign(campaignId);
+    if (!campaign) return null;
+    const bump = campaign.plan.find((b) => b.packageName === packageName);
+    if (!bump) return null;
+    if (!bump.findings?.some((f) => f.fixStatus === 'coding')) return bump;
+  }
+
+  const campaign = await getCampaign(campaignId);
+  if (campaign) {
+    const bump = campaign.plan.find((b) => b.packageName === packageName);
+    if (bump?.findings?.some((f) => f.fixStatus === 'coding')) {
+      const cleaned = bump.findings.map((f) =>
+        f.fixStatus === 'coding' ? { ...f, fixStatus: undefined } : f,
+      );
+      await updateBumps(campaignId, [{ packageName, fields: { findings: cleaned as PlannedBump['findings'] } }]);
+      console.log(`  Webhook: cleared stuck coding status for ${packageName}`);
+    }
+  }
+  return null;
+}
+
+async function handleCICompletion(owner: string, repoName: string, branches: string[], webhookSha: string): Promise<void> {
   const campaigns = await listCampaigns();
   const active = campaigns.find(
     (c) => c.repoOwner === owner && c.repoName === repoName && !['done', 'failed'].includes(c.status),
@@ -81,15 +95,30 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
 
   const matchedBumps = active.plan.filter((b) => {
     const branchName = `depbot-triage/${b.packageName}-${b.targetVersion}`;
-    const fixing = b.findings?.some((f) => f.fixStatus === 'coding');
-    return branches.includes(branchName) && b.prNumber && b.verdict !== 'reanalysing' && !fixing;
+    return branches.includes(branchName) && b.prNumber && b.verdict !== 'reanalysing';
   });
 
   if (matchedBumps.length === 0) return;
 
-  for (const bump of matchedBumps) {
+  for (let bump of matchedBumps) {
+    const fixing = bump.findings?.some((f) => f.fixStatus === 'coding');
+    if (fixing) {
+      console.log(`  Webhook: ${bump.packageName} has fix in progress, waiting...`);
+      const refreshed = await waitForFixCompletion(active.id, bump.packageName);
+      if (!refreshed) {
+        console.log(`  Webhook: ${bump.packageName} fix wait timed out, skipping`);
+        continue;
+      }
+      bump = refreshed;
+    }
+
     console.log(`  Webhook: CI completed for ${bump.packageName}, checking status...`);
-    const { status, details } = await getPRCIStatus(owner, repoName, bump.prNumber!);
+    const { status, details, headSha } = await getPRCIStatus(owner, repoName, bump.prNumber!);
+
+    if (!fixing && headSha !== webhookSha) {
+      console.log(`  Webhook: ${bump.packageName} stale event (webhook: ${webhookSha.slice(0, 7)}, HEAD: ${headSha.slice(0, 7)}), skipping`);
+      continue;
+    }
 
     const statusChanged = status !== bump.ciStatus;
     const needsReanalysis = status === 'failure' || (status === 'success' && bump.verdict !== 'safe');
@@ -98,7 +127,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
       continue;
     }
 
-    const fields: Partial<PlannedBump> = { ciStatus: status };
+    await updateBumps(active.id, [{ packageName: bump.packageName, fields: { ciStatus: status } }]);
 
     const atCap = (bump.fixAttempts ?? 0) >= MAX_FIX_ATTEMPTS;
 
@@ -109,20 +138,29 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
           `✅ **CI passed** but fix attempts exhausted (${MAX_FIX_ATTEMPTS}). Needs manual review.`);
       } else {
         console.log(`  Webhook: CI passing for ${bump.packageName} but verdict is ${bump.verdict}, re-analysing...`);
-        const prevVerdict = bump.verdict;
         const branchRef = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
-        const commitHistory = await getBranchCommitHistory(owner, repoName, branchRef);
-        await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
+        const prevVerdict = await setReanalysing(active.id, bump.packageName);
+        if (prevVerdict === null) {
+          console.log(`  Webhook: ${bump.packageName} blocked from re-analysis (concurrent operation)`);
+          continue;
+        }
         try {
           const result = await classifyBump(owner, repoName, bump, branchRef);
-          fields.verdict = result.verdict;
-          fields.verdictReason = result.reason;
-          fields.breakingChanges = result.breakingChanges;
-          fields.findings = mergeFixStatus(bump.findings, result.findings);
+          await updateBumps(active.id, [{
+            packageName: bump.packageName,
+            mergeNewFindings: true,
+            fields: {
+              verdict: result.verdict,
+              verdictReason: result.reason,
+              breakingChanges: result.breakingChanges,
+              findings: result.findings,
+              reanalysingAt: undefined,
+            },
+          }]);
           await commentOnPR(owner, repoName, bump.prNumber!,
             `✅ **CI passed.** Re-analysed — verdict updated to **${result.verdict}**.`);
         } catch (err) {
-          fields.verdict = prevVerdict;
+          await clearReanalysing(active.id, bump.packageName, prevVerdict);
           console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
         }
       }
@@ -143,20 +181,30 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
           console.log(`  Webhook: Re-analysing ${bump.packageName} with CI errors...`);
           const branchRef = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
           const commitHistory = await getBranchCommitHistory(owner, repoName, branchRef);
-          const prevVerdict = bump.verdict;
-          await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
+          const prevVerdict = await setReanalysing(active.id, bump.packageName);
+          if (prevVerdict === null) {
+            console.log(`  Webhook: ${bump.packageName} blocked from re-analysis (concurrent operation)`);
+            continue;
+          }
           try {
             const enrichedErrors = commitHistory
               ? `${ciErrors}\n\nPrevious fix attempts on this branch:\n${commitHistory}`
               : ciErrors;
             const result = await reanalyseWithCIErrors(owner, repoName, bump, enrichedErrors);
-            fields.verdict = result.verdict;
-            fields.verdictReason = result.reason;
-            fields.findings = mergeFixStatus(bump.findings, result.findings);
+            await updateBumps(active.id, [{
+              packageName: bump.packageName,
+              mergeNewFindings: true,
+              fields: {
+                verdict: result.verdict,
+                verdictReason: result.reason,
+                findings: result.findings,
+                reanalysingAt: undefined,
+              },
+            }]);
             await commentOnPR(owner, repoName, bump.prNumber!,
               `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
           } catch (err) {
-            fields.verdict = prevVerdict;
+            await clearReanalysing(active.id, bump.packageName, prevVerdict);
             console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
           }
         } else {
@@ -165,15 +213,13 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
         }
       }
     }
-
-    await updateBumps(active.id, [{ packageName: bump.packageName, fields }]);
   }
 
   // Re-read after all updates to check if everything is resolved
   const updated = await updateBumps(active.id, []);
   if (!updated) return;
   const allResolved = updated.plan.every(
-    (b) => !b.prNumber || /^(success|failure|no-checks)$/.test(b.ciStatus ?? ''),
+    (b) => !b.prNumber || (b.verdict !== 'reanalysing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
   );
   if (allResolved) {
     console.log(`  Webhook: All CI resolved for campaign ${active.id}, marking done.`);
