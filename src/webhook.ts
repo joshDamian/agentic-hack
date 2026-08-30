@@ -50,7 +50,7 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
 async function handleCICompletion(owner: string, repoName: string, branches: string[]): Promise<void> {
   const campaigns = await listCampaigns();
   const active = campaigns.find(
-    (c) => c.repoOwner === owner && c.repoName === repoName && c.status === 'monitoring',
+    (c) => c.repoOwner === owner && c.repoName === repoName && !['done', 'failed'].includes(c.status),
   );
   if (!active) return;
 
