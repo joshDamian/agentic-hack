@@ -151,7 +151,8 @@ Analyse each file's usage against the breaking changes. The compile check result
   } catch (err: any) {
     if (err?.status === 'ABORTED' && err?.details?.response) {
       const partial = err.details.response;
-      response = { text: partial.text?.() ?? partial.message?.text?.() ?? '' };
+      const t = typeof partial.text === 'function' ? partial.text() : partial.text;
+      response = { text: t ?? '' };
     } else {
       throw err;
     }
@@ -241,7 +242,8 @@ Based on the CI errors, identify every affected file and line. The verdict must 
   } catch (err: any) {
     if (err?.status === 'ABORTED' && err?.details?.response) {
       const partial = err.details.response;
-      response = { text: partial.text?.() ?? partial.message?.text?.() ?? '' };
+      const t = typeof partial.text === 'function' ? partial.text() : partial.text;
+      response = { text: t ?? '' };
     } else {
       throw err;
     }
