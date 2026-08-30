@@ -9,76 +9,98 @@ export const applyFixFlow = ai.defineFlow(
     inputSchema: z.object({
       campaignId: z.string(),
       packageName: z.string(),
-      findingIndex: z.number(),
+      findingIndices: z.array(z.number()),
     }),
     outputSchema: z.object({
       success: z.boolean(),
       message: z.string(),
+      applied: z.number(),
+      total: z.number(),
     }),
   },
-  async ({ campaignId, packageName, findingIndex }) => {
+  async ({ campaignId, packageName, findingIndices }) => {
     const campaign = await getCampaign(campaignId);
-    if (!campaign) return { success: false, message: 'Campaign not found' };
+    if (!campaign) return { success: false, message: 'Campaign not found', applied: 0, total: 0 };
 
     const bump = campaign.plan.find((b) => b.packageName === packageName);
-    if (!bump) return { success: false, message: 'Package not in campaign' };
-    if (!bump.prNumber) return { success: false, message: 'No PR exists for this package' };
+    if (!bump) return { success: false, message: 'Package not in campaign', applied: 0, total: 0 };
+    if (!bump.prNumber) return { success: false, message: 'No PR exists for this package', applied: 0, total: 0 };
 
-    const finding = bump.findings?.[findingIndex];
-    if (!finding) return { success: false, message: 'Finding not found' };
-    if (!finding.isAffected) return { success: false, message: 'Finding is not affected' };
+    const targets = findingIndices
+      .map((i) => ({ index: i, finding: bump.findings?.[i] }))
+      .filter((t) => t.finding?.isAffected);
+
+    if (targets.length === 0) return { success: false, message: 'No applicable findings', applied: 0, total: 0 };
 
     const { repoOwner: owner, repoName: repo } = campaign;
     const branchName = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
 
-    const prompt = `Apply a fix to the repository **${owner}/${repo}** on branch **${branchName}**.
+    const findingDescriptions = targets.map(({ finding }, i) => {
+      const f = finding!;
+      let desc = `### Fix ${i + 1}: ${f.file}:${f.line}\n**Analysis:** ${f.analysis}`;
+      if (f.fixKind === 'remove') {
+        desc += `\n**Action:** Remove the code entirely.\n\`\`\`\n${f.originalCode}\n\`\`\``;
+      } else if (f.suggestedFix) {
+        desc += `\n**Suggested fix:**\n\`\`\`\n${f.suggestedFix}\n\`\`\``;
+      } else {
+        desc += '\nNo suggested fix — use your judgment based on the analysis.';
+      }
+      return desc;
+    }).join('\n\n');
+
+    const prompt = `Apply ${targets.length} fix${targets.length > 1 ? 'es' : ''} to **${owner}/${repo}** on branch **${branchName}**.
 
 **Package upgrade:** ${bump.packageName} ${bump.currentVersion} → ${bump.targetVersion}
 
-**Affected file:** ${finding.file} at line ${finding.line}
-**Analysis:** ${finding.analysis}
-${finding.suggestedFix ? `**Suggested fix:**\n\`\`\`\n${finding.suggestedFix}\n\`\`\`` : 'No suggested fix available — use your judgment based on the analysis.'}
+${findingDescriptions}
 
-Read the file first, understand the context around line ${finding.line}, then apply the fix using commitFix.
-Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
+Read each affected file, apply all fixes, then commit. You can make multiple commitFix calls if needed (one per file, or group related changes). Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
 
-    await updateFinding(campaignId, packageName, findingIndex, { fixStatus: 'coding' });
+    for (const { index } of targets) {
+      await updateFinding(campaignId, packageName, index, { fixStatus: 'coding' });
+    }
 
-    let applied = false;
+    let appliedCount = 0;
     let message = '';
     try {
       const chat = coderAgent.chat();
       const response = await chat.send(prompt);
       message = response.text;
 
-      applied = response.messages.some((m) =>
+      const commitCount = response.messages.filter((m) =>
         m.role === 'tool' &&
         m.content.some(
           (p) =>
             p.toolResponse?.name === 'commitFix' &&
             (p.toolResponse.output as { success?: boolean })?.success === true,
         ),
-      );
+      ).length;
+
+      appliedCount = commitCount > 0 ? targets.length : 0;
     } catch (err) {
       message = `Agent error: ${err instanceof Error ? err.message : err}`;
     }
 
-    if (applied) {
-      await updateFinding(campaignId, packageName, findingIndex, {
-        fixStatus: 'applied',
-        analysis: `[Fixed] ${finding.analysis}`,
-        suggestedFix: undefined,
-      });
+    if (appliedCount > 0) {
+      for (const { index, finding } of targets) {
+        await updateFinding(campaignId, packageName, index, {
+          fixStatus: 'applied',
+          analysis: `[Fixed] ${finding!.analysis}`,
+          suggestedFix: undefined,
+        });
+      }
       await updateBumps(campaignId, [{
         packageName,
         fields: { ciStatus: 'pending' },
       }]);
     } else {
-      await updateFinding(campaignId, packageName, findingIndex, {
-        fixStatus: undefined,
-      });
+      for (const { index } of targets) {
+        await updateFinding(campaignId, packageName, index, {
+          fixStatus: undefined,
+        });
+      }
     }
 
-    return { success: applied, message };
+    return { success: appliedCount > 0, message, applied: appliedCount, total: targets.length };
   },
 );

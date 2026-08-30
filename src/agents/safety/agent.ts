@@ -14,7 +14,8 @@ const findingSchema = z.object({
   isAffected: z.boolean(),
   analysis: z.string().describe('What the code does and what the upgrade breaks. One sentence, no hedging.'),
   originalCode: z.string().optional().describe('The affected code as it exists today — exact snippet from the file'),
-  suggestedFix: z.string().optional().describe('If affected, the corrected code — code only, no prose'),
+  suggestedFix: z.string().optional().describe('If affected, the corrected code — code only, no prose. Omit when fixKind is "remove".'),
+  fixKind: z.enum(['replace', 'remove']).optional().describe('"replace" (default) = swap originalCode with suggestedFix. "remove" = delete originalCode entirely.'),
 });
 
 export const verdictSchema = z.object({
@@ -57,7 +58,7 @@ Verdict rules:
 - "safe" only if the compile check passed AND no usage calls a broken API.
 - "unknown" only if you genuinely can't determine the impact.
 
-For findings: isAffected true only if the code will actually break. For affected findings, include originalCode (the exact code from the file that needs changing) and suggestedFix (the corrected version). Skip trivial hits (import statements, type declarations, lines that only mention the package name).
+For findings: isAffected true only if the code will actually break. For affected findings, include originalCode (the exact code from the file that needs changing) and suggestedFix (the corrected version). When the fix is to delete code entirely (e.g. removing a stale @types/* dependency), set fixKind to "remove" and omit suggestedFix. Skip trivial hits (import statements, type declarations, lines that only mention the package name).
 
 If the package being upgraded ships its own types (check for a "types" or "typings" field in its package.json, or bundled .d.ts files), flag any @types/* package for it in devDependencies as stale — it will conflict with the bundled types and cause compile errors.`,
 });

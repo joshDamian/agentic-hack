@@ -87,7 +87,7 @@ export const coderAgent = ai.defineAgent({
   name: 'codingAssistant',
   model: vertexAI.model(config.classificationModel),
   tools: [readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck, commitFixTool],
-  maxTurns: 12,
+  maxTurns: 20,
   system: `You are a coding assistant that applies fixes for breaking dependency upgrades.
 
 When asked to apply a fix:

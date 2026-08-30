@@ -401,23 +401,32 @@ function renderDetail(c: Campaign, b: PlannedBump): string {
     const affected = b.findings.filter((f) => f.isAffected);
     const ok = b.findings.filter((f) => !f.isAffected);
     html += '<div class="detail-section"><div class="detail-label">Code review</div>';
+    const bumpFixId = `fixes-${esc(c.id)}-${esc(b.packageName)}`;
+    let hasSelectableFixes = false;
     for (const f of affected) {
       const findingIdx = b.findings!.indexOf(f);
-      const hasApply = f.suggestedFix && b.prNumber && f.fixStatus !== 'applied';
+      const isRemoval = f.fixKind === 'remove' && f.originalCode;
+      const canApply = (f.suggestedFix || isRemoval) && b.prNumber && f.fixStatus !== 'applied';
       const hasFix = !!(f.originalCode || f.suggestedFix);
       let applyBtn = '';
+      let checkbox = '';
       if (f.fixStatus === 'coding') {
         applyBtn = `<button class="apply-fix-btn" disabled><span class="spinner spinner-sm"></span> Coding…</button>`;
       } else if (f.fixStatus === 'applied') {
         applyBtn = `<button class="apply-fix-btn apply-done" disabled>Applied</button>`;
-      } else if (hasApply) {
+      } else if (canApply) {
+        hasSelectableFixes = true;
+        checkbox = `<label class="fix-checkbox" onclick="event.stopPropagation()"><input type="checkbox" data-fix-group="${bumpFixId}" data-finding-idx="${findingIdx}" onchange="updateApplySelected('${bumpFixId}', '${esc(c.id)}', '${esc(b.packageName)}')" /></label>`;
         applyBtn = `<button class="apply-fix-btn" onclick="event.stopPropagation(); applyFix(this, '${esc(c.id)}', '${esc(b.packageName)}', ${findingIdx})">Apply fix</button>`;
       }
       html += `<div class="finding affected">
-        <div class="finding-loc">${esc(f.file)}:${f.line}</div>
+        <div class="finding-header">${checkbox}<div class="finding-loc">${esc(f.file)}:${f.line}</div></div>
         <p>${esc(f.analysis)}</p>
-        ${hasFix ? `<div class="fix-row"><div class="fix-label">${f.originalCode && f.suggestedFix ? 'Before → After' : 'Suggested fix'}</div>${applyBtn}</div><div class="code-diff">${f.originalCode ? `<pre class="code-block code-before">${highlightCode(dedent(f.originalCode), f.file)}</pre>` : ''}${f.originalCode && f.suggestedFix ? '<div class="diff-arrow">→</div>' : ''}${f.suggestedFix ? `<pre class="code-block code-after">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}</div>` : ''}
+        ${isRemoval ? `<div class="fix-row"><div class="fix-label">Remove</div>${applyBtn}</div><div class="code-diff"><pre class="code-block code-remove">${highlightCode(dedent(f.originalCode!), f.file)}</pre></div>` : hasFix ? `<div class="fix-row"><div class="fix-label">${f.originalCode && f.suggestedFix ? 'Before → After' : 'Suggested fix'}</div>${applyBtn}</div><div class="code-diff">${f.originalCode ? `<pre class="code-block code-before">${highlightCode(dedent(f.originalCode), f.file)}</pre>` : ''}${f.originalCode && f.suggestedFix ? '<div class="diff-arrow">→</div>' : ''}${f.suggestedFix ? `<pre class="code-block code-after">${highlightCode(dedent(f.suggestedFix), f.file)}</pre>` : ''}</div>` : ''}
       </div>`;
+    }
+    if (hasSelectableFixes) {
+      html += `<div class="apply-selected-row" id="${bumpFixId}-actions" style="display:none"><button class="apply-fix-btn apply-selected-btn" onclick="event.stopPropagation(); applySelected('${esc(c.id)}', '${esc(b.packageName)}', '${bumpFixId}')">Apply selected (<span class="apply-count">0</span>)</button></div>`;
     }
     if (ok.length > 0) {
       html += `<button class="fp-toggle" onclick="event.stopPropagation(); var t=this.nextElementSibling; var open=t.classList.toggle('open'); this.textContent=open ? 'Hide checked but not affected (${ok.length})' : 'Checked but not affected (${ok.length})';">Checked but not affected (${ok.length})</button>`;
@@ -591,6 +600,42 @@ async function applyFix(btn, campaignId, packageName, findingIndex) {
     console.error(e);
     btn.disabled = false;
     btn.textContent = 'Apply fix';
+  }
+}
+
+function updateApplySelected(groupId, campaignId, packageName) {
+  var checks = document.querySelectorAll('input[data-fix-group="' + groupId + '"]:checked');
+  var row = document.getElementById(groupId + '-actions');
+  if (!row) return;
+  if (checks.length > 0) {
+    row.style.display = '';
+    row.querySelector('.apply-count').textContent = checks.length;
+  } else {
+    row.style.display = 'none';
+  }
+}
+
+async function applySelected(campaignId, packageName, groupId) {
+  var checks = document.querySelectorAll('input[data-fix-group="' + groupId + '"]:checked');
+  if (checks.length === 0) return;
+  var indices = [];
+  checks.forEach(function(cb) { indices.push(Number(cb.dataset.findingIdx)); });
+  var row = document.getElementById(groupId + '-actions');
+  var btn = row.querySelector('.apply-selected-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner spinner-sm"></span> Applying ' + indices.length + ' fix' + (indices.length > 1 ? 'es' : '') + '\\u2026';
+  checks.forEach(function(cb) { cb.disabled = true; });
+  try {
+    await fetch('/api/apply-fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campaignId: campaignId, packageName: packageName, findingIndices: indices })
+    });
+  } catch (e) {
+    console.error(e);
+    btn.disabled = false;
+    btn.textContent = 'Apply selected (' + indices.length + ')';
+    checks.forEach(function(cb) { cb.disabled = false; });
   }
 }
 
@@ -1030,6 +1075,12 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .diff-arrow { display: flex; align-items: center; font-size: 1rem; color: var(--text-faint); flex-shrink: 0; }
 .code-before { border-color: var(--risk); border-left: 3px solid var(--risk); }
 .code-after { border-color: var(--safe-text); border-left: 3px solid var(--safe-text); }
+.code-remove { border-color: var(--risk); border-left: 3px solid var(--risk); text-decoration: line-through; opacity: 0.8; }
+.finding-header { display: flex; align-items: center; gap: 0.5rem; }
+.fix-checkbox { display: flex; align-items: center; cursor: pointer; }
+.fix-checkbox input { width: 1rem; height: 1rem; cursor: pointer; accent-color: var(--accent); }
+.apply-selected-row { margin-top: 0.75rem; display: flex; justify-content: flex-end; }
+.apply-selected-btn { font-weight: 600; }
 .code-block .hljs-doctag, .code-block .hljs-keyword, .code-block .hljs-meta .hljs-keyword,
 .code-block .hljs-template-tag, .code-block .hljs-template-variable,
 .code-block .hljs-type, .code-block .hljs-variable.language_ { color: #d73a49; }

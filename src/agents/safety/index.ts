@@ -184,11 +184,12 @@ function parseAgentResponse(
     reason: result.reason,
     breakingChanges: bcData.length > 0 ? bcData : [],
     findings: result.findings.map((f) => {
-      const entry: { file: string; line: number; isAffected: boolean; analysis: string; originalCode?: string; suggestedFix?: string } = {
+      const entry: { file: string; line: number; isAffected: boolean; analysis: string; originalCode?: string; suggestedFix?: string; fixKind?: 'replace' | 'remove' } = {
         file: f.file, line: f.line, isAffected: f.isAffected, analysis: f.analysis,
       };
       if (f.originalCode) entry.originalCode = f.originalCode;
       if (f.suggestedFix) entry.suggestedFix = f.suggestedFix;
+      if (f.fixKind === 'remove') entry.fixKind = 'remove';
       return entry;
     }),
   };

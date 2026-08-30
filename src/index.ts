@@ -98,18 +98,19 @@ app.get('/api/bump', async (req, res) => {
 });
 
 app.post('/api/apply-fix', (req, res) => {
-  const { campaignId, packageName, findingIndex } = req.body as {
-    campaignId: string; packageName: string; findingIndex: number;
+  const { campaignId, packageName, findingIndex, findingIndices } = req.body as {
+    campaignId: string; packageName: string; findingIndex?: number; findingIndices?: number[];
   };
-  if (!campaignId || !packageName || findingIndex === undefined) {
-    res.status(400).json({ error: 'campaignId, packageName, and findingIndex are required' });
+  const indices = findingIndices ?? (findingIndex !== undefined ? [findingIndex] : []);
+  if (!campaignId || !packageName || indices.length === 0) {
+    res.status(400).json({ error: 'campaignId, packageName, and findingIndices (or findingIndex) are required' });
     return;
   }
-  console.log(`Apply fix triggered: ${packageName} finding #${findingIndex}`);
-  applyFixFlow({ campaignId, packageName, findingIndex })
-    .then((result) => console.log(`Apply fix result: ${result.message}`))
+  console.log(`Apply fix triggered: ${packageName} findings #${indices.join(', #')}`);
+  applyFixFlow({ campaignId, packageName, findingIndices: indices })
+    .then((result) => console.log(`Apply fix result (${result.applied}/${result.total}): ${result.message}`))
     .catch((err) => console.error('Apply fix error:', err));
-  res.json({ started: true, campaignId, packageName, findingIndex });
+  res.json({ started: true, campaignId, packageName, findingIndices: indices });
 });
 
 app.post('/pipeline', expressHandler(pipelineFlow));

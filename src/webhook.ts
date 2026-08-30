@@ -64,7 +64,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
     console.log(`  Webhook: CI completed for ${bump.packageName}, checking status...`);
     const { status, details } = await getPRCIStatus(owner, repoName, bump.prNumber!);
 
-    if (status === bump.ciStatus) {
+    if (status === bump.ciStatus && status !== 'failure') {
       console.log(`  Webhook: ${bump.packageName} ciStatus already ${status}, skipping`);
       continue;
     }
