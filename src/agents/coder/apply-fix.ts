@@ -1,7 +1,7 @@
 import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { coderAgent } from './agent.js';
-import { getCampaign, updateFinding } from '../../tools/firestore/client.js';
+import { getCampaign, updateFinding, updateBumps } from '../../tools/firestore/client.js';
 
 export const applyFixFlow = ai.defineFlow(
   {
@@ -69,6 +69,10 @@ Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
         analysis: `[Fixed] ${finding.analysis}`,
         suggestedFix: undefined,
       });
+      await updateBumps(campaignId, [{
+        packageName,
+        fields: { ciStatus: 'pending' },
+      }]);
     } else {
       await updateFinding(campaignId, packageName, findingIndex, {
         fixStatus: undefined,
