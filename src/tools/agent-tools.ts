@@ -1,8 +1,36 @@
 import { z } from 'genkit';
+import fs from 'node:fs';
+import path from 'node:path';
 import { ai } from '../genkit.js';
-import { getFileContent, getInstallationOctokit } from './github/client.js';
+import { getFileContent } from './github/client.js';
+import { getRepoSnapshot } from './github/zipball.js';
 import { compileCheck } from './npm/compile-check.js';
 import { getPackageTypeDiff } from './npm/typediff.js';
+
+async function localSourceFiles(
+  owner: string,
+  repo: string,
+  ref?: string,
+): Promise<Map<string, string>> {
+  const root = await getRepoSnapshot(owner, repo, ref);
+  const results = new Map<string, string>();
+
+  function walk(dir: string, prefix: string) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
+        walk(path.join(dir, entry.name), rel);
+      } else if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+        if (rel.startsWith('src/')) {
+          results.set(rel, fs.readFileSync(path.join(dir, entry.name), 'utf-8'));
+        }
+      }
+    }
+  }
+
+  walk(root, '');
+  return results;
+}
 
 export const readRepoFile = ai.defineTool(
   {
@@ -16,11 +44,15 @@ export const readRepoFile = ai.defineTool(
     }),
     outputSchema: z.string(),
   },
-  async ({ owner, repo, path, ref }) => {
+  async ({ owner, repo, path: filePath, ref }) => {
     try {
-      return await getFileContent(owner, repo, path, ref);
+      const root = await getRepoSnapshot(owner, repo, ref);
+      const full = path.join(root, filePath);
+      if (fs.existsSync(full)) return fs.readFileSync(full, 'utf-8');
+      // Fallback for files outside the snapshot (rare)
+      return await getFileContent(owner, repo, filePath, ref);
     } catch (err: any) {
-      return `Error reading ${path}: ${err.message ?? err}`;
+      return `Error reading ${filePath}: ${err.message ?? err}`;
     }
   },
 );
@@ -38,15 +70,8 @@ export const listRepoFiles = ai.defineTool(
   },
   async ({ owner, repo, ref }) => {
     try {
-      const octokit = await getInstallationOctokit();
-      const { data: tree } = await octokit.rest.git.getTree({
-        owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-      });
-      const files = tree.tree
-        .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-        .map((f) => f.path!)
-        .filter((p) => p.startsWith('src/'));
-      return files.join('\n');
+      const files = await localSourceFiles(owner, repo, ref);
+      return [...files.keys()].join('\n');
     } catch (err: any) {
       return `Error listing files: ${err.message ?? err}`;
     }
@@ -66,25 +91,12 @@ export const searchCodeInRepo = ai.defineTool(
     outputSchema: z.string(),
   },
   async ({ owner, repo, pattern, ref }) => {
-    let files: string[];
     try {
-      const octokit = await getInstallationOctokit();
-      const { data: tree } = await octokit.rest.git.getTree({
-        owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-      });
-      files = tree.tree
-        .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-        .map((f) => f.path!)
-        .filter((p) => p.startsWith('src/'));
-    } catch (err: any) {
-      return `Error listing repo tree: ${err.message ?? err}`;
-    }
+      const files = await localSourceFiles(owner, repo, ref);
+      const results: string[] = [];
 
-    const results: string[] = [];
-    for (const filePath of files) {
-      if (results.length > 50) break;
-      try {
-        const content = await getFileContent(owner, repo, filePath, ref);
+      for (const [filePath, content] of files) {
+        if (results.length > 50) break;
         const lines = content.split('\n');
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].includes(pattern)) {
@@ -98,9 +110,12 @@ export const searchCodeInRepo = ai.defineTool(
             results.push(`${filePath}:${i + 1}\n${context}`);
           }
         }
-      } catch {}
+      }
+
+      return results.length > 0 ? results.join('\n\n') : 'No matches found.';
+    } catch (err: any) {
+      return `Error searching: ${err.message ?? err}`;
     }
-    return results.length > 0 ? results.join('\n\n') : 'No matches found.';
   },
 );
 
@@ -118,33 +133,17 @@ export const runCompileCheck = ai.defineTool(
     outputSchema: z.string(),
   },
   async ({ owner, repo, packageName, targetVersion, ref }) => {
-    let files: string[];
     try {
-      const octokit = await getInstallationOctokit();
-      const { data: tree } = await octokit.rest.git.getTree({
-        owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-      });
-      files = tree.tree
-        .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-        .map((f) => f.path!)
-        .filter((p) => p.startsWith('src/'));
-    } catch (err: any) {
-      return `Error listing repo tree: ${err.message ?? err}`;
-    }
-
-    const sourceFiles = new Map<string, string>();
-    for (const filePath of files) {
-      try {
-        const content = await getFileContent(owner, repo, filePath, ref);
+      const allFiles = await localSourceFiles(owner, repo, ref);
+      const sourceFiles = new Map<string, string>();
+      for (const [filePath, content] of allFiles) {
         if (content.includes(packageName)) {
           sourceFiles.set(filePath, content);
         }
-      } catch {}
-    }
+      }
 
-    if (sourceFiles.size === 0) return 'No source files import this package.';
+      if (sourceFiles.size === 0) return 'No source files import this package.';
 
-    try {
       const result = await compileCheck(packageName, targetVersion, sourceFiles);
       if (!result.ran) return 'Compile check did not run (no relevant source files).';
       if (result.errors.length === 0) return 'Clean — no errors.';

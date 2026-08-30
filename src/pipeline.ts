@@ -3,12 +3,13 @@ import { ai } from './genkit.js';
 import { listAlerts, getFileContent, getInstallationOctokit } from './tools/github/client.js';
 import { planBumps } from './agents/prioritiser/plan.js';
 import { createCampaign, updateCampaign, findStuckCampaign } from './tools/firestore/client.js';
-import { classifyBump } from './agents/safety/index.js';
+import { prepBump, classifyPreparedBump } from './agents/safety/index.js';
 import { clearFileCache } from './agents/safety/usage.js';
 import { createBranchAndPR, postAnalysisReview } from './tools/github/pr.js';
 import { getPRCIStatus, commentOnPR } from './tools/github/ci.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
-import { runWithConcurrency } from './shared/concurrency.js';
+import { Semaphore } from './shared/concurrency.js';
+import { clearSnapshots } from './tools/github/zipball.js';
 
 async function reconcilePRs(owner: string, repo: string, bumps: PlannedBump[]): Promise<number> {
   const octokit = await getInstallationOctokit();
@@ -29,12 +30,6 @@ async function reconcilePRs(owner: string, repo: string, bumps: PlannedBump[]): 
     }
   }
   return reconciled;
-}
-
-const stageOrder = ['planning', 'analysing', 'executing', 'monitoring', 'done'] as const;
-
-function stageAtOrPast(current: string, target: string): boolean {
-  return stageOrder.indexOf(current as any) >= stageOrder.indexOf(target as any);
 }
 
 export const pipelineFlow = ai.defineFlow(
@@ -113,21 +108,36 @@ async function resumeCampaign(
     await updateCampaign(campaignId, { startedAt: new Date().toISOString() });
   }
 
-  // --- Analyse (skip if already past) ---
-  if (!stageAtOrPast(campaign.status, 'executing')) {
-    clearFileCache();
-    console.log('=== Safety Analyser ===');
-    await updateCampaign(campaignId, { status: 'analysing' });
+  clearFileCache();
+  await updateCampaign(campaignId, { status: 'analysing' });
 
-    const needsAnalysis = bumps.filter((b) => !b.verdict);
-    if (needsAnalysis.length < bumps.length) {
-      console.log(`  Skipping ${bumps.length - needsAnalysis.length} already-analysed bumps`);
-    }
+  const prepSem = new Semaphore(5);
+  const classifySem = new Semaphore(5);
+  const execSem = new Semaphore(2);
+  const monitorSem = new Semaphore(3);
 
-    await runWithConcurrency(needsAnalysis, 3, async (bump) => {
+  function derivedStatus(): Campaign['status'] {
+    const hasUnanalysed = bumps.some((b) => !b.verdict);
+    const hasPending = bumps.some((b) => b.verdict && !b.prNumber);
+    const hasUnmonitored = bumps.some((b) => b.prNumber && !b.ciStatus?.match(/success|failure|no-checks/));
+    if (hasUnanalysed) return 'analysing';
+    if (hasPending) return 'executing';
+    if (hasUnmonitored) return 'monitoring';
+    return 'monitoring';
+  }
+
+  async function saveBumps() {
+    await updateCampaign(campaignId, { plan: bumps, status: derivedStatus() });
+  }
+
+  await Promise.all(bumps.map(async (bump) => {
+    // --- Analyse ---
+    if (!bump.verdict) {
       try {
-        console.log(`  Analysing ${bump.packageName}...`);
-        const result = await classifyBump(owner, repo, bump);
+        console.log(`  Prepping ${bump.packageName}...`);
+        const prep = await prepSem.run(() => prepBump(owner, repo, bump));
+        console.log(`  Classifying ${bump.packageName}...`);
+        const result = await classifySem.run(() => classifyPreparedBump(owner, repo, bump, prep));
         bump.verdict = result.verdict;
         bump.verdictReason = result.reason;
         bump.breakingChanges = result.breakingChanges;
@@ -137,57 +147,45 @@ async function resumeCampaign(
         bump.verdict = 'unknown';
         bump.verdictReason = 'Analysis failed — will retry on next run';
       }
-      await updateCampaign(campaignId, { plan: bumps });
-    });
-  }
+      await saveBumps();
+    }
 
-  // --- Execute (skip if already past) ---
-  if (!stageAtOrPast(campaign.status, 'monitoring')) {
-    console.log('=== Executor ===');
-    await updateCampaign(campaignId, { status: 'executing' });
-    let prsOpened = 0;
-    for (const bump of bumps) {
-      if (bump.prNumber) {
-        console.log(`  Skipping ${bump.packageName}: PR #${bump.prNumber} already exists`);
-        continue;
-      }
-      if (dryRun) {
-        console.log(`  [DRY RUN] ${bump.packageName}: ${bump.verdict}`);
-        continue;
-      }
+    // --- Execute ---
+    if (!bump.prNumber && !dryRun) {
       try {
         console.log(`  Opening PR for ${bump.packageName}...`);
-        const result = await createBranchAndPR(owner, repo, bump);
+        const result = await execSem.run(() => createBranchAndPR(owner, repo, bump));
         bump.prNumber = result.prNumber;
         bump.prUrl = result.prUrl;
         bump.ciStatus = 'pending';
-        prsOpened++;
-
-        await postAnalysisReview(owner, repo, result.prNumber, bump);
+        await execSem.run(() => postAnalysisReview(owner, repo, result.prNumber, bump));
       } catch (err) {
-        console.log(`  Failed: ${err instanceof Error ? err.message : err}`);
+        console.log(`  PR failed for ${bump.packageName}: ${err instanceof Error ? err.message : err}`);
       }
-      // Save after each PR so a restart doesn't lose progress
-      await updateCampaign(campaignId, { plan: bumps });
+      await saveBumps();
     }
-    await updateCampaign(campaignId, { status: 'monitoring' });
-  }
 
-  // --- Monitor ---
-  console.log('=== Monitor ===');
-  for (const bump of bumps) {
-    if (!bump.prNumber) continue;
-    const { status, details } = await getPRCIStatus(owner, repo, bump.prNumber);
-    bump.ciStatus = status;
-    if (status === 'success' && bump.verdict === 'safe') {
-      await commentOnPR(owner, repo, bump.prNumber, '✅ **CI passed** and safety analysis says this bump is safe.\n\n**Ready to merge.**');
+    // --- Monitor ---
+    if (bump.prNumber) {
+      try {
+        const { status, details } = await monitorSem.run(() => getPRCIStatus(owner, repo, bump.prNumber!));
+        bump.ciStatus = status;
+        if (status === 'success' && bump.verdict === 'safe') {
+          await monitorSem.run(() => commentOnPR(owner, repo, bump.prNumber!, '✅ **CI passed** and safety analysis says this bump is safe.\n\n**Ready to merge.**'));
+        }
+        if (status === 'failure') {
+          await monitorSem.run(() => commentOnPR(owner, repo, bump.prNumber!, `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`));
+        }
+      } catch (err) {
+        console.log(`  Monitor failed for ${bump.packageName}: ${err instanceof Error ? err.message : err}`);
+      }
+      await saveBumps();
     }
-    if (status === 'failure') {
-      await commentOnPR(owner, repo, bump.prNumber, `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`);
-    }
-    await updateCampaign(campaignId, { plan: bumps });
-  }
+  }));
+
   await updateCampaign(campaignId, { status: 'done', completedAt: new Date().toISOString() });
+
+  clearSnapshots();
 
   const safe = bumps.filter((b) => b.verdict === 'safe').length;
   const risky = bumps.filter((b) => b.verdict === 'risky').length;

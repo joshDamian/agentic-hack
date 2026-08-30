@@ -4,6 +4,7 @@ import { ai } from '../../genkit.js';
 import { config } from '../../shared/config.js';
 import { readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck } from '../../tools/agent-tools.js';
 import { getInstallationOctokit, getFileContent } from '../../tools/github/client.js';
+import { bustSnapshot } from '../../tools/github/zipball.js';
 
 const commitFixTool = ai.defineTool(
   {
@@ -69,6 +70,7 @@ const commitFixTool = ai.defineTool(
         sha: commit.sha,
       });
 
+      bustSnapshot(owner, repo, branch);
       return { success: true, commitSha: commit.sha };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };

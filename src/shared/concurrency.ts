@@ -12,3 +12,23 @@ export async function runWithConcurrency<T>(
   });
   await Promise.all(workers);
 }
+
+export class Semaphore {
+  private queue: Array<() => void> = [];
+  private active = 0;
+
+  constructor(private limit: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.active++;
+    try {
+      return await fn();
+    } finally {
+      this.active--;
+      this.queue.shift()?.();
+    }
+  }
+}

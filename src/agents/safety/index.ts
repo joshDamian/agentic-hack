@@ -1,10 +1,12 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { extractBreakingChanges } from './changelog.js';
 import { safetyAgent, verdictSchema } from './agent.js';
 import { getCampaign, updateCampaign } from '../../tools/firestore/client.js';
-import { getFileContent, getInstallationOctokit } from '../../tools/github/client.js';
 import { compileCheck } from '../../tools/npm/compile-check.js';
+import { getRepoSnapshot } from '../../tools/github/zipball.js';
 import type { BumpVerdict, PlannedBump } from '../../shared/types.js';
 
 export { clearFileCache } from './usage.js';
@@ -17,24 +19,22 @@ async function gatherSourceFiles(
 ): Promise<Map<string, string>> {
   const matched = new Map<string, string>();
   try {
-    const octokit = await getInstallationOctokit();
-    const { data: tree } = await octokit.rest.git.getTree({
-      owner, repo, tree_sha: ref ?? 'HEAD', recursive: 'true',
-    });
-    const allFiles = tree.tree
-      .filter((f) => f.type === 'blob' && f.path?.match(/\.(ts|tsx)$/) && !f.path.endsWith('.d.ts'))
-      .map((f) => f.path!)
-      .filter((p) => p.startsWith('src/'));
-
-    for (const filePath of allFiles) {
-      if (matched.size >= MAX_FILES) break;
-      try {
-        const content = await getFileContent(owner, repo, filePath, ref);
-        if (content.includes(packageName)) {
-          matched.set(filePath, content);
+    const root = await getRepoSnapshot(owner, repo, ref);
+    const walk = (dir: string, prefix: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (matched.size >= MAX_FILES) return;
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== '.git') {
+          walk(path.join(dir, entry.name), rel);
+        } else if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith('.d.ts') && rel.startsWith('src/')) {
+          const content = fs.readFileSync(path.join(dir, entry.name), 'utf-8');
+          if (content.includes(packageName)) {
+            matched.set(rel, content);
+          }
         }
-      } catch {}
-    }
+      }
+    };
+    walk(root, '');
   } catch {}
   return matched;
 }
@@ -58,13 +58,25 @@ export interface ClassificationResult {
   findings: PlannedBump['findings'];
 }
 
-export async function classifyBump(
+export interface PrepResult {
+  bcData: NonNullable<PlannedBump['breakingChanges']>;
+  bcSection: string;
+  isMajor: boolean;
+  codeContext: string;
+  compileSection: string;
+}
+
+export async function prepBump(
   owner: string,
   repo: string,
   bump: PlannedBump,
   ref?: string,
-): Promise<ClassificationResult> {
-  const breakingChanges = await extractBreakingChanges(bump);
+): Promise<PrepResult> {
+  const [breakingChanges, sourceFiles] = await Promise.all([
+    extractBreakingChanges(bump),
+    gatherSourceFiles(owner, repo, bump.packageName, ref),
+  ]);
+
   const bcData = breakingChanges.changes.map((c) => {
     const entry: { api: string; kind: string; description: string; migrationHint?: string } = {
       api: c.api, kind: c.kind, description: c.description,
@@ -86,7 +98,6 @@ export async function classifyBump(
   const to = bump.targetVersion.split('.')[0];
   const isMajor = from !== to;
 
-  const sourceFiles = await gatherSourceFiles(owner, repo, bump.packageName, ref);
   const codeContext = formatCodeContext(sourceFiles);
 
   let compileSection = '';
@@ -105,6 +116,20 @@ export async function classifyBump(
       compileSection = `\n\nCompile check: error — ${err instanceof Error ? err.message : err}`;
     }
   }
+
+  return { bcData, bcSection, isMajor, codeContext, compileSection };
+}
+
+export async function classifyPreparedBump(
+  owner: string,
+  repo: string,
+  bump: PlannedBump,
+  prep: PrepResult,
+  ref?: string,
+): Promise<ClassificationResult> {
+  const { bcData, bcSection, isMajor, codeContext, compileSection } = prep;
+  const from = bump.currentVersion.split('.')[0];
+  const to = bump.targetVersion.split('.')[0];
 
   const prompt = `Investigate whether upgrading **${bump.packageName}** from ${bump.currentVersion} to ${bump.targetVersion} will break the repository **${owner}/${repo}**.${isMajor ? ` This is a major version bump (${from}.x → ${to}.x) — be extra thorough.` : ''}
 
@@ -160,6 +185,16 @@ Analyse each file's usage against the breaking changes. The compile check result
       return entry;
     }),
   };
+}
+
+export async function classifyBump(
+  owner: string,
+  repo: string,
+  bump: PlannedBump,
+  ref?: string,
+): Promise<ClassificationResult> {
+  const prep = await prepBump(owner, repo, bump, ref);
+  return classifyPreparedBump(owner, repo, bump, prep, ref);
 }
 
 export const safetyAnalyserFlow = ai.defineFlow(
