@@ -76,12 +76,19 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
       const ciErrors = await getCIFailureLogs(owner, repoName, bump.prNumber!);
       if (ciErrors) {
         console.log(`  Webhook: Re-analysing ${bump.packageName} with CI errors...`);
-        const result = await reanalyseWithCIErrors(owner, repoName, bump, ciErrors);
-        fields.verdict = result.verdict;
-        fields.verdictReason = result.reason;
-        fields.findings = result.findings;
-        await commentOnPR(owner, repoName, bump.prNumber!,
-          `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
+        const prevVerdict = bump.verdict;
+        await updateBumps(active.id, [{ packageName: bump.packageName, fields: { verdict: 'reanalysing' } }]);
+        try {
+          const result = await reanalyseWithCIErrors(owner, repoName, bump, ciErrors);
+          fields.verdict = result.verdict;
+          fields.verdictReason = result.reason;
+          fields.findings = result.findings;
+          await commentOnPR(owner, repoName, bump.prNumber!,
+            `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
+        } catch (err) {
+          fields.verdict = prevVerdict;
+          console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
+        }
       } else {
         await commentOnPR(owner, repoName, bump.prNumber!,
           `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`);
