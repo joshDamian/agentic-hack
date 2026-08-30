@@ -102,13 +102,19 @@ export const reanalyseFlow = ai.defineFlow(
       throw err;
     }
 
+    const mergedFindings = (result.findings ?? []).map((f) => {
+      const prev = (bump.findings ?? []).find((o) => o.file === f.file && o.line === f.line);
+      if (prev?.fixStatus) return { ...f, fixStatus: prev.fixStatus };
+      return f;
+    });
+
     await updateBumps(campaignId, [{
       packageName,
       fields: {
         verdict: result.verdict,
         verdictReason: result.reason,
         breakingChanges: result.breakingChanges,
-        findings: result.findings,
+        findings: mergedFindings,
       },
     }]);
 

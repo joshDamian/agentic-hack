@@ -2,6 +2,10 @@ import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { coderAgent } from './agent.js';
 import { getCampaign, updateCampaign, updateFinding, updateBumps } from '../../tools/firestore/client.js';
+import { getPRCIStatus } from '../../tools/github/ci.js';
+
+const CI_POLL_DELAY = 30_000;
+const CI_POLL_ATTEMPTS = 6;
 
 export const applyFixFlow = ai.defineFlow(
   {
@@ -97,6 +101,10 @@ Read each affected file, apply all fixes, then commit. You can make multiple com
       if (latest && latest.status === 'done') {
         await updateCampaign(campaignId, { status: 'iterating' });
       }
+
+      pollCIAfterFix(campaignId, owner, repo, bump.prNumber!, packageName).catch((err) =>
+        console.error(`CI poll error for ${packageName}:`, err),
+      );
     } else {
       for (const { index } of targets) {
         await updateFinding(campaignId, packageName, index, {
@@ -108,3 +116,22 @@ Read each affected file, apply all fixes, then commit. You can make multiple com
     return { success: appliedCount > 0, message, applied: appliedCount, total: targets.length };
   },
 );
+
+async function pollCIAfterFix(
+  campaignId: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  packageName: string,
+): Promise<void> {
+  for (let i = 0; i < CI_POLL_ATTEMPTS; i++) {
+    await new Promise((r) => setTimeout(r, CI_POLL_DELAY));
+    const { status } = await getPRCIStatus(owner, repo, prNumber);
+    if (status !== 'pending') {
+      console.log(`  Post-fix CI poll: ${packageName} → ${status}`);
+      await updateBumps(campaignId, [{ packageName, fields: { ciStatus: status } }]);
+      return;
+    }
+  }
+  console.log(`  Post-fix CI poll: ${packageName} still pending after ${CI_POLL_ATTEMPTS} attempts`);
+}

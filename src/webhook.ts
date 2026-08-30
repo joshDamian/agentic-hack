@@ -9,6 +9,19 @@ import type { Campaign, PlannedBump } from './shared/types.js';
 
 const MAX_FIX_ATTEMPTS = 5;
 
+function mergeFixStatus(
+  oldFindings: PlannedBump['findings'],
+  newFindings: PlannedBump['findings'],
+): PlannedBump['findings'] {
+  if (!newFindings) return newFindings;
+  if (!oldFindings?.length) return newFindings;
+  return newFindings.map((f) => {
+    const prev = oldFindings.find((o) => o.file === f.file && o.line === f.line);
+    if (prev?.fixStatus) return { ...f, fixStatus: prev.fixStatus };
+    return f;
+  });
+}
+
 async function getBranchCommitHistory(owner: string, repo: string, branch: string, limit = 10): Promise<string> {
   try {
     const octokit = await getInstallationOctokit();
@@ -68,7 +81,8 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
 
   const matchedBumps = active.plan.filter((b) => {
     const branchName = `depbot-triage/${b.packageName}-${b.targetVersion}`;
-    return branches.includes(branchName) && b.prNumber && b.verdict !== 'reanalysing';
+    const fixing = b.findings?.some((f) => f.fixStatus === 'coding');
+    return branches.includes(branchName) && b.prNumber && b.verdict !== 'reanalysing' && !fixing;
   });
 
   if (matchedBumps.length === 0) return;
@@ -104,7 +118,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
           fields.verdict = result.verdict;
           fields.verdictReason = result.reason;
           fields.breakingChanges = result.breakingChanges;
-          fields.findings = result.findings;
+          fields.findings = mergeFixStatus(bump.findings, result.findings);
           await commentOnPR(owner, repoName, bump.prNumber!,
             `✅ **CI passed.** Re-analysed — verdict updated to **${result.verdict}**.`);
         } catch (err) {
@@ -138,7 +152,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
             const result = await reanalyseWithCIErrors(owner, repoName, bump, enrichedErrors);
             fields.verdict = result.verdict;
             fields.verdictReason = result.reason;
-            fields.findings = result.findings;
+            fields.findings = mergeFixStatus(bump.findings, result.findings);
             await commentOnPR(owner, repoName, bump.prNumber!,
               `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
           } catch (err) {
