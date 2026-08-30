@@ -15,7 +15,6 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
     return;
   }
 
-  const event = req.headers['x-github-event'] as string;
   if (event !== 'check_suite' && event !== 'check_run') {
     res.status(200).send('Ignored');
     return;
