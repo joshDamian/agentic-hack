@@ -191,9 +191,8 @@ export const safetyAnalyserFlow = ai.defineFlow(
       bump.breakingChanges = result.breakingChanges;
       bump.findings = result.findings;
       results.push({ packageName: bump.packageName, verdict: result.verdict, reason: result.reason });
+      await updateCampaign(campaignId, { plan: campaign.plan });
     }
-
-    await updateCampaign(campaignId, { plan: campaign.plan });
 
     return { campaignId, results };
   },

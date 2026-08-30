@@ -37,23 +37,41 @@ hljs.registerLanguage('php', php);
 const SCHEDULE_HOUR = Number(process.env.PIPELINE_SCHEDULE_HOUR ?? '2');
 const SCHEDULE_TZ = process.env.PIPELINE_TIMEZONE ?? 'Africa/Lagos';
 
-export async function dashboardHandler(req: Request, res: Response) {
-  const repoParam = req.query.repo as string | undefined;
-  let campaigns = await listCampaigns();
-
-  let repo: { owner: string; name: string };
+function resolveRepo(
+  repoParam: string | undefined,
+  campaigns: Campaign[],
+): { campaigns: Campaign[]; repo: { owner: string; name: string } } {
   if (repoParam && repoParam.includes('/')) {
     const [owner, ...rest] = repoParam.split('/');
-    repo = { owner, name: rest.join('/') };
-    campaigns = campaigns.filter((c) => c.repoOwner === owner && c.repoName === repo.name);
-  } else {
-    repo = campaigns[0]
-      ? { owner: campaigns[0].repoOwner, name: campaigns[0].repoName }
-      : config.targetRepo;
+    const repo = { owner, name: rest.join('/') };
+    return { campaigns: campaigns.filter((c) => c.repoOwner === owner && c.repoName === repo.name), repo };
   }
+  const repo = campaigns[0]
+    ? { owner: campaigns[0].repoOwner, name: campaigns[0].repoName }
+    : config.targetRepo;
+  return { campaigns, repo };
+}
 
+export async function dashboardHandler(req: Request, res: Response) {
+  const all = await listCampaigns();
+  const { campaigns, repo } = resolveRepo(req.query.repo as string | undefined, all);
   const latest = campaigns[0] ?? null;
   res.type('html').send(renderPage(campaigns, latest, repo));
+}
+
+export async function dashboardPartialHandler(req: Request, res: Response) {
+  const all = await listCampaigns();
+  const { campaigns, repo } = resolveRepo(req.query.repo as string | undefined, all);
+  const latest = campaigns[0] ?? null;
+  const active = !!latest && !['done', 'failed'].includes(latest.status);
+  const stuck = !!latest && isStuck(latest);
+  const html = `${renderTopbar(repo, active, stuck, latest)}
+<main>
+${latest ? renderToast(latest) : ''}
+${latest ? renderRunCard(latest, stuck) : renderEmpty()}
+${campaigns.length > 1 ? renderHistory(campaigns.slice(1)) : ''}
+</main>`;
+  res.type('html').send(html);
 }
 
 function esc(s: string): string {
@@ -120,12 +138,14 @@ function renderPage(campaigns: Campaign[], latest: Campaign | null, repo: { owne
 <style>${STYLES}</style>
 </head>
 <body>
-${renderTopbar(repo, active, stuck)}
+<div id="live-root">
+${renderTopbar(repo, active, stuck, latest)}
 <main>
 ${latest ? renderToast(latest) : ''}
 ${latest ? renderRunCard(latest, stuck) : renderEmpty()}
 ${campaigns.length > 1 ? renderHistory(campaigns.slice(1)) : ''}
 </main>
+</div>
 <script>${clientScript(active, repo)}</script>
 </body>
 </html>`;
@@ -135,7 +155,7 @@ const installUrl = config.githubAppSlug
   ? `https://github.com/apps/${config.githubAppSlug}/installations/new`
   : '';
 
-function renderTopbar(repo: { owner: string; name: string }, active: boolean, stuck: boolean): string {
+function renderTopbar(repo: { owner: string; name: string }, active: boolean, stuck: boolean, latest?: Campaign | null): string {
   const connectBtn = installUrl
     ? `<a class="connect-btn" href="${installUrl}" target="_blank" title="Connect a repository">+</a>`
     : '';
@@ -159,14 +179,32 @@ function renderTopbar(repo: { owner: string; name: string }, active: boolean, st
     ${stuck ? `<button class="run-btn" onclick="triggerRun(false)"><svg viewBox="0 0 12 14"><polygon points="2,0 12,7 2,14"/></svg> Resume</button>
     <button class="run-btn run-btn-secondary" onclick="triggerRun(true)">Start fresh</button>`
     : `<button class="run-btn" id="run-btn" onclick="triggerRun()" ${active ? 'disabled' : ''}>
-      ${active ? '<span class="spinner"></span> Running…' : '<svg viewBox="0 0 12 14"><polygon points="2,0 12,7 2,14"/></svg> Run now'}
+      ${active ? `<span class="spinner"></span> ${latest ? stageProgressLabel(latest) : 'Running'}…` : '<svg viewBox="0 0 12 14"><polygon points="2,0 12,7 2,14"/></svg> Run now'}
     </button>`}
   </div>
 </div>`;
 }
 
+function stageProgressLabel(c: Campaign): string {
+  if (c.status === 'analysing') {
+    const done = c.plan.filter((b) => b.verdict).length;
+    return `Analysing ${done}/${c.plan.length}`;
+  }
+  if (c.status === 'executing') {
+    const done = c.plan.filter((b) => b.prNumber).length;
+    const eligible = c.plan.filter((b) => b.verdict).length;
+    return `Executing ${done}/${eligible}`;
+  }
+  if (c.status === 'monitoring') {
+    const resolved = c.plan.filter((b) => b.ciStatus === 'success' || b.ciStatus === 'failure').length;
+    const withPRs = c.plan.filter((b) => b.prNumber).length;
+    return `Monitoring ${resolved}/${withPRs}`;
+  }
+  return 'Running';
+}
+
 function renderRunCard(c: Campaign, stuck: boolean): string {
-  const statusLabel = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : stuck ? 'Interrupted' : 'Running';
+  const statusLabel = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : stuck ? 'Interrupted' : stageProgressLabel(c);
   const statusCls = c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : stuck ? 'stuck' : 'active';
 
   const durationTag = c.startedAt && c.completedAt
@@ -183,14 +221,15 @@ function renderRunCard(c: Campaign, stuck: boolean): string {
     ${durationTag}
   </div>
   <div class="run-body">
-    ${renderPipeline(c.status)}
+    ${renderPipeline(c)}
     ${renderStats(c)}
     ${renderBumps(c)}
   </div>
 </div>`;
 }
 
-function renderPipeline(status: string): string {
+function renderPipeline(c: Campaign): string {
+  const status = c.status;
   const idx = stageKeys.indexOf(status);
   const isFailed = status === 'failed';
   const parts: string[] = [];
@@ -205,8 +244,22 @@ function renderPipeline(status: string): string {
       cls += ' active';
     }
 
+    let label = stageLabels[i];
+    if (stageKeys[i] === 'analysing' && status === 'analysing') {
+      const done = c.plan.filter((b) => b.verdict).length;
+      label = `Analyse (${done}/${c.plan.length})`;
+    } else if (stageKeys[i] === 'executing' && status === 'executing') {
+      const done = c.plan.filter((b) => b.prNumber).length;
+      const eligible = c.plan.filter((b) => b.verdict).length;
+      label = `Execute (${done}/${eligible})`;
+    } else if (stageKeys[i] === 'monitoring' && status === 'monitoring') {
+      const resolved = c.plan.filter((b) => b.ciStatus === 'success' || b.ciStatus === 'failure').length;
+      const withPRs = c.plan.filter((b) => b.prNumber).length;
+      label = `Monitor (${resolved}/${withPRs})`;
+    }
+
     parts.push(
-      `<div class="${cls}"><div class="step-dot"></div><span class="step-label">${stageLabels[i]}</span></div>`,
+      `<div class="${cls}"><div class="step-dot"></div><span class="step-label">${label}</span></div>`,
     );
 
     if (i < stageLabels.length - 1) {
@@ -418,14 +471,71 @@ function renderHistory(campaigns: Campaign[]): string {
 </div>`;
 }
 
-function clientScript(active: boolean, repo: { owner: string; name: string }): string {
+function clientScript(_active: boolean, repo: { owner: string; name: string }): string {
   return `
+var _lastUpdate = '';
+
 function toggle(row) {
   var detail = row.nextElementSibling;
   var isOpen = row.classList.toggle('open');
   if (isOpen) detail.classList.add('open');
   else detail.classList.remove('open');
 }
+
+function getOpenPackages() {
+  var open = [];
+  document.querySelectorAll('.bump-row.open[data-pkg]').forEach(function(r) {
+    open.push(r.getAttribute('data-pkg'));
+  });
+  return open;
+}
+
+function restoreOpenPackages(pkgs) {
+  pkgs.forEach(function(pkg) {
+    var rows = document.querySelectorAll('.bump-row[data-pkg]');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute('data-pkg') === pkg) {
+        rows[i].classList.add('open');
+        rows[i].nextElementSibling.classList.add('open');
+        break;
+      }
+    }
+  });
+}
+
+function refreshContent() {
+  var repoParam = encodeURIComponent('${repo.owner}/${repo.name}');
+  fetch('/api/partial?repo=' + repoParam).then(function(res) {
+    return res.text();
+  }).then(function(html) {
+    var open = getOpenPackages();
+    var scroll = window.scrollY;
+    var wrapper = document.getElementById('live-root');
+    if (wrapper) wrapper.innerHTML = html;
+    restoreOpenPackages(open);
+    window.scrollTo(0, scroll);
+    openFromHash();
+  }).catch(function(e) { console.error('Refresh failed:', e); });
+}
+
+function connectStream() {
+  var src = new EventSource('/api/stream?repo=' + encodeURIComponent('${repo.owner}/${repo.name}'));
+  src.onmessage = function(e) {
+    try {
+      var data = JSON.parse(e.data);
+      var key = data ? data.updatedAt + data.status : 'null';
+      if (key !== _lastUpdate) {
+        _lastUpdate = key;
+        refreshContent();
+      }
+    } catch (err) { console.error('SSE parse error:', err); }
+  };
+  src.onerror = function() {
+    src.close();
+    setTimeout(connectStream, 5000);
+  };
+}
+connectStream();
 
 async function triggerRun(fresh) {
   var btns = document.querySelectorAll('.run-btn');
@@ -438,59 +548,18 @@ async function triggerRun(fresh) {
       body: JSON.stringify({ owner: '${repo.owner}', repo: '${repo.name}', fresh: !!fresh })
     });
   } catch (e) { console.error(e); }
-  pollUntilActive();
-}
-
-function pollUntilActive() {
-  var attempts = 0;
-  var poll = setInterval(async function() {
-    attempts++;
-    try {
-      var res = await fetch('/api/status?repo=${repo.owner}/${repo.name}');
-      var data = await res.json();
-      if (data.active || data.status === 'done' || data.status === 'failed' || attempts > 30) {
-        clearInterval(poll);
-        location.reload();
-      }
-    } catch (e) {
-      if (attempts > 30) { clearInterval(poll); location.reload(); }
-    }
-  }, 2000);
 }
 
 async function reanalyse(btn, campaignId, packageName) {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Re-analysing\\u2026';
   location.hash = 'pkg-' + packageName;
-
-  var row = btn.closest('.detail-inner').parentElement.previousElementSibling;
-  var verdictEl = row.querySelector('.verdict');
-  var oldVerdict = verdictEl ? verdictEl.textContent.trim() : '';
-
   try {
-    var snap = await fetch('/api/bump?campaignId=' + encodeURIComponent(campaignId) + '&package=' + encodeURIComponent(packageName));
-    var before = await snap.json();
-
     await fetch('/reanalyse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ campaignId: campaignId, packageName: packageName })
     });
-
-    var attempts = 0;
-    var poll = setInterval(async function() {
-      attempts++;
-      try {
-        var res = await fetch('/api/bump?campaignId=' + encodeURIComponent(campaignId) + '&package=' + encodeURIComponent(packageName));
-        var data = await res.json();
-        if (data.updatedAt !== before.updatedAt || attempts > 90) {
-          clearInterval(poll);
-          location.reload();
-        }
-      } catch (e) {
-        if (attempts > 90) { clearInterval(poll); location.reload(); }
-      }
-    }, 3000);
   } catch (e) {
     console.error(e);
     btn.disabled = false;
@@ -508,29 +577,7 @@ async function applyFix(btn, campaignId, packageName, findingIndex) {
       body: JSON.stringify({ campaignId: campaignId, packageName: packageName, findingIndex: findingIndex })
     });
     var data = await res.json();
-    if (data.started) {
-      btn.innerHTML = '<span class="spinner spinner-sm"></span> Working\\u2026';
-      var attempts = 0;
-      var poll = setInterval(async function() {
-        attempts++;
-        try {
-          var snapRes = await fetch('/api/bump?campaignId=' + encodeURIComponent(campaignId) + '&package=' + encodeURIComponent(packageName));
-          var snap = await snapRes.json();
-          if (attempts > 60) {
-            clearInterval(poll);
-            btn.textContent = 'Timed out';
-            btn.classList.add('apply-done');
-          }
-        } catch (e) {
-          if (attempts > 60) { clearInterval(poll); btn.textContent = 'Error'; }
-        }
-      }, 3000);
-      setTimeout(function() {
-        clearInterval(poll);
-        btn.textContent = 'Applied';
-        btn.classList.add('apply-done');
-      }, 30000);
-    } else {
+    if (!data.started) {
       btn.textContent = 'Error';
     }
   } catch (e) {
@@ -577,9 +624,8 @@ function updateCountdown() {
 }
 updateCountdown();
 setInterval(updateCountdown, 60000);
-${active ? '\nsetTimeout(function() { location.reload(); }, 5000);' : ''}
 
-(function openFromHash() {
+function openFromHash() {
   var hash = location.hash;
   if (!hash || !hash.startsWith('#pkg-')) return;
   var pkg = decodeURIComponent(hash.slice(5));
@@ -592,7 +638,8 @@ ${active ? '\nsetTimeout(function() { location.reload(); }, 5000);' : ''}
       break;
     }
   }
-})();
+}
+openFromHash();
 `;
 }
 

@@ -76,6 +76,7 @@ export const executorFlow = ai.defineFlow(
           prUrl: result.prUrl,
           verdict: bump.verdict,
         });
+        await updateCampaign(campaignId, { plan: campaign.plan });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.log(`Failed to open PR for ${bump.packageName}: ${message}`);

@@ -137,8 +137,8 @@ async function resumeCampaign(
         bump.verdict = 'unknown';
         bump.verdictReason = 'Analysis failed — will retry on next run';
       }
+      await updateCampaign(campaignId, { plan: bumps });
     });
-    await updateCampaign(campaignId, { plan: bumps });
   }
 
   // --- Execute (skip if already past) ---
@@ -185,8 +185,9 @@ async function resumeCampaign(
     if (status === 'failure') {
       await commentOnPR(owner, repo, bump.prNumber, `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`);
     }
+    await updateCampaign(campaignId, { plan: bumps });
   }
-  await updateCampaign(campaignId, { plan: bumps, status: 'done', completedAt: new Date().toISOString() });
+  await updateCampaign(campaignId, { status: 'done', completedAt: new Date().toISOString() });
 
   const safe = bumps.filter((b) => b.verdict === 'safe').length;
   const risky = bumps.filter((b) => b.verdict === 'risky').length;

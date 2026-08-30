@@ -9,10 +9,10 @@ import { monitorFlow } from './agents/monitor/index.js';
 import { pipelineFlow } from './pipeline.js';
 import { reanalyseFlow } from './reanalyse.js';
 import { applyFixFlow } from './agents/coder/apply-fix.js';
-import { dashboardHandler } from './dashboard.js';
+import { dashboardHandler, dashboardPartialHandler } from './dashboard.js';
 import { config } from './shared/config.js';
 import { listInstallationRepos } from './tools/github/client.js';
-import { listCampaigns, getCampaign } from './tools/firestore/client.js';
+import { listCampaigns, getCampaign, subscribeCampaigns } from './tools/firestore/client.js';
 
 const app = express();
 app.use(express.json());
@@ -37,6 +37,30 @@ app.post('/reanalyse', (req, res) => {
   console.log(`Re-analysis triggered for ${packageName} in campaign ${campaignId}`);
   reanalyseFlow({ campaignId, packageName }).catch((err) => console.error('Re-analysis error:', err));
   res.json({ started: true, campaignId, packageName });
+});
+
+app.get('/api/partial', dashboardPartialHandler);
+
+app.get('/api/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.write(':\n\n');
+
+  const unsubscribe = subscribeCampaigns((campaigns) => {
+    const repoParam = req.query.repo as string | undefined;
+    const match = repoParam
+      ? campaigns.find((c) => `${c.repoOwner}/${c.repoName}` === repoParam)
+      : campaigns[0];
+    const summary = match
+      ? { status: match.status, updatedAt: match.updatedAt, id: match.id }
+      : null;
+    res.write(`data: ${JSON.stringify(summary)}\n\n`);
+  });
+
+  req.on('close', () => unsubscribe());
 });
 
 app.get('/api/repos', async (_req, res) => {

@@ -40,4 +40,17 @@ export async function findStuckCampaign(owner: string, repo: string): Promise<Ca
   return match;
 }
 
+export function subscribeCampaigns(
+  onUpdate: (campaigns: Campaign[]) => void,
+): () => void {
+  return campaigns.orderBy('createdAt', 'desc').onSnapshot(
+    (snapshot) => {
+      onUpdate(snapshot.docs.map((d) => d.data() as Campaign));
+    },
+    (err) => {
+      console.error('Firestore snapshot error:', err);
+    },
+  );
+}
+
 export { db };

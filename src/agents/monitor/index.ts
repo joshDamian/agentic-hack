@@ -68,9 +68,9 @@ export const monitorFlow = ai.defineFlow(
           `❌ **CI failed.** Details: ${details}\n\nThis bump may need manual investigation.`,
         );
       }
-    }
 
-    await updateCampaign(campaignId, { plan: campaign.plan });
+      await updateCampaign(campaignId, { plan: campaign.plan });
+    }
 
     const allDone = bumpsWithPRs.every(
       (b) => b.ciStatus === 'success' || b.ciStatus === 'failure' || b.ciStatus === 'no-checks',
