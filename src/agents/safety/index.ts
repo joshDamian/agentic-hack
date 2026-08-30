@@ -52,7 +52,7 @@ function formatCodeContext(files: Map<string, string>): string {
 }
 
 export interface ClassificationResult {
-  verdict: BumpVerdict;
+  verdict: 'safe' | 'risky' | 'unknown';
   reason: string;
   breakingChanges: PlannedBump['breakingChanges'];
   findings: PlannedBump['findings'];
@@ -269,7 +269,7 @@ export const safetyAnalyserFlow = ai.defineFlow(
 
     await updateCampaign(campaignId, { status: 'analysing' });
 
-    const results: Array<{ packageName: string; verdict: BumpVerdict; reason: string }> = [];
+    const results: Array<{ packageName: string; verdict: 'safe' | 'risky' | 'unknown'; reason: string }> = [];
 
     for (const bump of campaign.plan) {
       console.log(`Analysing ${bump.packageName}...`);

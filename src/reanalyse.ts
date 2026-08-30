@@ -1,6 +1,6 @@
 import { z } from 'genkit';
 import { ai } from './genkit.js';
-import { getCampaign, updateCampaign } from './tools/firestore/client.js';
+import { getCampaign, updateBumps } from './tools/firestore/client.js';
 import { classifyBump } from './agents/safety/index.js';
 import { postAnalysisReview } from './tools/github/pr.js';
 import { commentOnPR } from './tools/github/ci.js';
@@ -81,22 +81,28 @@ export const reanalyseFlow = ai.defineFlow(
     const previousVerdict = bump.verdict ?? 'none';
     const previousFindings = (bump.findings ?? []).filter((f) => f.isAffected);
 
+    await updateBumps(campaignId, [{
+      packageName,
+      fields: { verdict: 'reanalysing' },
+    }]);
+
     const branchRef = bump.prNumber
       ? `depbot-triage/${packageName}-${bump.targetVersion}`
       : undefined;
     console.log(`Re-analysing ${packageName} (was: ${previousVerdict})...`);
     const result = await classifyBump(campaign.repoOwner, campaign.repoName, bump, branchRef);
-    // Re-read campaign before writing to avoid clobbering concurrent re-analyses
-    const fresh = await getCampaign(campaignId);
-    const freshBump = fresh!.plan.find((b) => b.packageName === packageName)!;
-    freshBump.verdict = result.verdict;
-    freshBump.verdictReason = result.reason;
-    freshBump.breakingChanges = result.breakingChanges;
-    freshBump.findings = result.findings;
 
-    await updateCampaign(campaignId, { plan: fresh!.plan });
+    await updateBumps(campaignId, [{
+      packageName,
+      fields: {
+        verdict: result.verdict,
+        verdictReason: result.reason,
+        breakingChanges: result.breakingChanges,
+        findings: result.findings,
+      },
+    }]);
 
-    if (freshBump.prNumber) {
+    if (bump.prNumber) {
       const comment = buildReanalysisComment(
         previousVerdict, result.verdict, result.reason,
         previousFindings, result.findings ?? [],
@@ -105,14 +111,14 @@ export const reanalyseFlow = ai.defineFlow(
       await commentOnPR(
         campaign.repoOwner,
         campaign.repoName,
-        freshBump.prNumber,
+        bump.prNumber,
         comment,
       );
       await postAnalysisReview(
         campaign.repoOwner,
         campaign.repoName,
-        freshBump.prNumber,
-        freshBump,
+        bump.prNumber,
+        bump,
         true,
       );
     }
@@ -122,7 +128,7 @@ export const reanalyseFlow = ai.defineFlow(
       previousVerdict,
       newVerdict: result.verdict,
       reason: result.reason,
-      prNumber: freshBump.prNumber,
+      prNumber: bump.prNumber,
     };
   },
 );
