@@ -60,7 +60,7 @@ export interface Campaign {
   id: string;
   repoOwner: string;
   repoName: string;
-  status: 'planning' | 'analysing' | 'executing' | 'monitoring' | 'done' | 'failed';
+  status: 'planning' | 'analysing' | 'executing' | 'monitoring' | 'done' | 'failed' | 'iterating';
   plan: PlannedBump[];
   createdAt: string;
   updatedAt: string;

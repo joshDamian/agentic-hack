@@ -111,7 +111,9 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
   );
   if (allResolved) {
     console.log(`  Webhook: All CI resolved for campaign ${active.id}, marking done.`);
-    await updateCampaign(active.id, { status: 'done', completedAt: new Date().toISOString() });
+    const fields: Record<string, string> = { status: 'done' };
+    if (!updated.completedAt) fields.completedAt = new Date().toISOString();
+    await updateCampaign(active.id, fields);
   }
 }
 

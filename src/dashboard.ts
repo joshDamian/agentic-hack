@@ -102,7 +102,7 @@ const stageKeys = ['planning', 'analysing', 'executing', 'monitoring', 'done'];
 const stageLabels = ['Plan', 'Analyse', 'Execute', 'Monitor', 'Done'];
 
 function isStuck(c: Campaign): boolean {
-  if (['done', 'failed'].includes(c.status)) return false;
+  if (['done', 'failed', 'iterating'].includes(c.status)) return false;
   const age = Date.now() - new Date(c.updatedAt).getTime();
   return age > 2 * 60 * 1000;
 }
@@ -204,8 +204,8 @@ function stageProgressLabel(c: Campaign): string {
 }
 
 function renderRunCard(c: Campaign, stuck: boolean): string {
-  const statusLabel = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : stuck ? 'Interrupted' : stageProgressLabel(c);
-  const statusCls = c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : stuck ? 'stuck' : 'active';
+  const statusLabel = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : c.status === 'iterating' ? 'Iterating' : stuck ? 'Interrupted' : stageProgressLabel(c);
+  const statusCls = c.status === 'done' ? 'done' : c.status === 'failed' ? 'failed' : c.status === 'iterating' ? 'iterating' : stuck ? 'stuck' : 'active';
 
   const durationTag = c.startedAt && c.completedAt
     ? `<span class="run-sep">&middot;</span><span class="run-duration">${fmtDuration(c.startedAt, c.completedAt)}</span>`
@@ -238,7 +238,7 @@ function renderPipeline(c: Campaign): string {
     let cls = 'step';
     if (isFailed) {
       // all steps neutral on failure
-    } else if (status === 'done' || i < idx) {
+    } else if (status === 'done' || status === 'iterating' || i < idx) {
       cls += ' done';
     } else if (i === idx) {
       cls += ' active';
@@ -264,7 +264,7 @@ function renderPipeline(c: Campaign): string {
 
     if (i < stageLabels.length - 1) {
       let lineCls = 'step-line';
-      if (!isFailed && (status === 'done' || i < idx)) lineCls += ' done';
+      if (!isFailed && (status === 'done' || status === 'iterating' || i < idx)) lineCls += ' done';
       parts.push(`<div class="${lineCls}"></div>`);
     }
   }
@@ -460,8 +460,8 @@ function renderEmpty(): string {
 function renderHistory(campaigns: Campaign[]): string {
   const rows = campaigns
     .map((c) => {
-      const cls = c.status === 'failed' ? ' failed' : '';
-      const label = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : c.status;
+      const cls = c.status === 'failed' ? ' failed' : c.status === 'iterating' ? ' iterating' : '';
+      const label = c.status === 'done' ? 'Done' : c.status === 'failed' ? 'Failed' : c.status === 'iterating' ? 'Iterating' : c.status;
       const dur = c.startedAt && c.completedAt ? fmtDuration(c.startedAt, c.completedAt) : '—';
       const safe = c.plan.filter((b) => b.verdict === 'safe').length;
       const risky = c.plan.filter((b) => b.verdict === 'risky').length;
@@ -857,6 +857,7 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .run-status.done { background: var(--safe-bg); color: var(--safe); }
 .run-status.failed { background: var(--risk-bg); color: var(--risk); }
 .run-status.active { background: var(--accent-dim); color: var(--accent); }
+.run-status.iterating { background: var(--accent-dim); color: var(--accent); }
 .run-status.stuck { background: var(--risk-bg); color: var(--risk); }
 .run-status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .run-duration {

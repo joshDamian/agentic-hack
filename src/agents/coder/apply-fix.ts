@@ -1,7 +1,7 @@
 import { z } from 'genkit';
 import { ai } from '../../genkit.js';
 import { coderAgent } from './agent.js';
-import { getCampaign, updateFinding, updateBumps } from '../../tools/firestore/client.js';
+import { getCampaign, updateCampaign, updateFinding, updateBumps } from '../../tools/firestore/client.js';
 
 export const applyFixFlow = ai.defineFlow(
   {
@@ -93,6 +93,10 @@ Read each affected file, apply all fixes, then commit. You can make multiple com
         packageName,
         fields: { ciStatus: 'pending' },
       }]);
+      const latest = await getCampaign(campaignId);
+      if (latest && latest.status === 'done') {
+        await updateCampaign(campaignId, { status: 'iterating' });
+      }
     } else {
       for (const { index } of targets) {
         await updateFinding(campaignId, packageName, index, {
