@@ -113,6 +113,7 @@ export const reanalyseFlow = ai.defineFlow(
         campaign.repoName,
         freshBump.prNumber,
         freshBump,
+        true,
       );
     }
 

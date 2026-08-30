@@ -247,36 +247,62 @@ export function buildAnalysisOutput(
   return { reviewBody: body, inlineComments };
 }
 
-export async function postAnalysisReview(
+async function pushTodoAnnotations(
   owner: string,
   repo: string,
-  prNumber: number,
+  branch: string,
   bump: PlannedBump,
+  missingFiles: string[],
 ): Promise<void> {
-  const { reviewBody, inlineComments } = buildAnalysisOutput(bump, owner, repo);
-  if (!reviewBody) return;
-
   const octokit = await getInstallationOctokit();
+  const { data: refData } = await octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+  const headSha = refData.object.sha;
+  const { data: headCommit } = await octokit.rest.git.getCommit({ owner, repo, commit_sha: headSha });
 
-  // Skip if we already posted a review/comment on this PR
-  const [{ data: existingReviews }, { data: existingComments }] = await Promise.all([
-    octokit.rest.pulls.listReviews({ owner, repo, pull_number: prNumber }),
-    octokit.rest.issues.listComments({ owner, repo, issue_number: prNumber }),
-  ]);
-  const alreadyPosted = existingReviews.some((r) => r.body?.includes('Safety Analysis'))
-    || existingComments.some((c) => c.body?.includes('Safety Analysis'));
-  if (alreadyPosted) return;
-
-  if (inlineComments.length === 0) {
-    await commentOnPR(owner, repo, prNumber, reviewBody);
-    return;
+  const affected = bump.findings?.filter((f) => f.isAffected && missingFiles.includes(f.file)) ?? [];
+  const byFile = new Map<string, Array<{ line: number; analysis: string }>>();
+  for (const f of affected) {
+    if (!byFile.has(f.file)) byFile.set(f.file, []);
+    byFile.get(f.file)!.push({ line: f.line, analysis: f.analysis });
   }
 
-  const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
-  const { data: files } = await octokit.rest.pulls.listFiles({ owner, repo, pull_number: prNumber });
+  const treeEntries: Array<{ path: string; mode: '100644'; type: 'blob'; sha: string }> = [];
+  for (const [filePath, findings] of byFile) {
+    try {
+      const content = await getFileContent(owner, repo, filePath, branch);
+      const lines = content.split('\n');
+      const sorted = findings.sort((a, b) => b.line - a.line);
+      for (const f of sorted) {
+        const idx = f.line - 1;
+        if (idx >= 0 && idx < lines.length) {
+          const indent = lines[idx].match(/^(\s*)/)?.[1] ?? '';
+          const todo = `${indent}${TODO_PREFIX} ${bump.packageName} ${bump.currentVersion} → ${bump.targetVersion} — review usage below`;
+          lines.splice(idx, 0, todo);
+        }
+      }
+      const { data: blob } = await octokit.rest.git.createBlob({
+        owner, repo, content: Buffer.from(lines.join('\n')).toString('base64'), encoding: 'base64',
+      });
+      treeEntries.push({ path: filePath, mode: '100644', type: 'blob', sha: blob.sha });
+    } catch {}
+  }
 
+  if (treeEntries.length === 0) return;
+
+  const { data: tree } = await octokit.rest.git.createTree({
+    owner, repo, base_tree: headCommit.tree.sha, tree: treeEntries,
+  });
+  const { data: commit } = await octokit.rest.git.createCommit({
+    owner, repo, message: `annotate affected files for ${bump.packageName} upgrade`, tree: tree.sha, parents: [headSha],
+  });
+  await octokit.rest.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: commit.sha });
+}
+
+function mapInlineComments(
+  inlineComments: Array<{ path: string; line: number; body: string }>,
+  files: Array<{ filename: string; patch?: string }>,
+): Array<{ path: string; position: number; body: string }> {
   const comments: Array<{ path: string; position: number; body: string }> = [];
-
   for (const c of inlineComments) {
     const diffFile = files.find((f) => f.filename === c.path);
     if (!diffFile?.patch) continue;
@@ -307,11 +333,56 @@ export async function postAnalysisReview(
       comments.push({ path: c.path, position: 1, body: c.body });
     }
   }
+  return comments;
+}
+
+export async function postAnalysisReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  bump: PlannedBump,
+  force?: boolean,
+): Promise<void> {
+  const { reviewBody, inlineComments } = buildAnalysisOutput(bump, owner, repo);
+  if (!reviewBody) return;
+
+  const octokit = await getInstallationOctokit();
+
+  if (!force) {
+    const [{ data: existingReviews }, { data: existingComments }] = await Promise.all([
+      octokit.rest.pulls.listReviews({ owner, repo, pull_number: prNumber }),
+      octokit.rest.issues.listComments({ owner, repo, issue_number: prNumber }),
+    ]);
+    const alreadyPosted = existingReviews.some((r) => r.body?.includes('Safety Analysis'))
+      || existingComments.some((c) => c.body?.includes('Safety Analysis'));
+    if (alreadyPosted) return;
+  }
+
+  if (inlineComments.length === 0) {
+    await commentOnPR(owner, repo, prNumber, reviewBody);
+    return;
+  }
+
+  const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber });
+  let { data: files } = await octokit.rest.pulls.listFiles({ owner, repo, pull_number: prNumber });
+
+  const missingFiles = [...new Set(inlineComments.map((c) => c.path))]
+    .filter((path) => !files.some((f) => f.filename === path));
+
+  if (missingFiles.length > 0) {
+    await pushTodoAnnotations(owner, repo, pr.head.ref, bump, missingFiles);
+    ({ data: files } = await octokit.rest.pulls.listFiles({ owner, repo, pull_number: prNumber }));
+  }
+
+  const comments = mapInlineComments(inlineComments, files);
 
   if (comments.length > 0) {
+    const { data: freshPr } = missingFiles.length > 0
+      ? await octokit.rest.pulls.get({ owner, repo, pull_number: prNumber })
+      : { data: pr };
     await octokit.rest.pulls.createReview({
       owner, repo, pull_number: prNumber,
-      commit_id: pr.head.sha,
+      commit_id: freshPr.head.sha,
       event: 'COMMENT',
       body: reviewBody,
       comments,
