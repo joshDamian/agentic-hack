@@ -24,7 +24,7 @@ export interface DependabotAlert {
   autoDismissedAt: string | null;
 }
 
-export type BumpVerdict = 'safe' | 'risky' | 'unknown' | 'reanalysing';
+export type BumpVerdict = 'safe' | 'risky' | 'unknown' | 'reanalysing' | 'fixing';
 
 export interface PlannedBump {
   packageName: string;
@@ -56,6 +56,7 @@ export interface PlannedBump {
   ciStatus?: 'pending' | 'success' | 'failure' | 'no-checks';
   fixAttempts?: number;
   reanalysingAt?: string;
+  fixingAt?: string;
 }
 
 export interface Campaign {

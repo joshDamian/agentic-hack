@@ -5,7 +5,8 @@ import { getCampaign, listCampaigns, updateBumps, updateCampaign, setReanalysing
 import { getPRCIStatus, commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
 import { getInstallationOctokit } from './tools/github/client.js';
 import { classifyBump, reanalyseWithCIErrors } from './agents/safety/index.js';
-import type { Campaign, PlannedBump } from './shared/types.js';
+import type { BumpVerdict, Campaign, PlannedBump } from './shared/types.js';
+import { applyFixFlow } from './agents/coder/apply-fix.js';
 
 const MAX_FIX_ATTEMPTS = 5;
 const FIXING_WAIT_INTERVAL = 10_000;
@@ -86,6 +87,56 @@ async function waitForFixCompletion(campaignId: string, packageName: string): Pr
   return null;
 }
 
+function getFixableIndices(findings: PlannedBump['findings']): number[] {
+  if (!findings) return [];
+  return findings
+    .map((f, i) => ({ f, i }))
+    .filter(({ f }) => f.isAffected && (f.suggestedFix || f.fixKind))
+    .map(({ i }) => i);
+}
+
+async function tryAutoFix(
+  campaignId: string,
+  owner: string,
+  repoName: string,
+  bump: PlannedBump,
+  analysisVerdict: BumpVerdict,
+  findings: PlannedBump['findings'],
+  ciErrors?: string,
+): Promise<void> {
+  const fixable = getFixableIndices(findings);
+  if (fixable.length === 0) return;
+  if ((bump.fixAttempts ?? 0) >= MAX_FIX_ATTEMPTS) return;
+  if (!bump.prNumber) return;
+
+  console.log(`  Webhook: Auto-fixing ${fixable.length} finding(s) for ${bump.packageName}...`);
+  await updateBumps(campaignId, [{
+    packageName: bump.packageName,
+    fields: { verdict: 'fixing', fixingAt: new Date().toISOString() },
+  }]);
+
+  try {
+    const result = await applyFixFlow({
+      campaignId,
+      packageName: bump.packageName,
+      findingIndices: fixable,
+      ciErrors,
+    });
+    console.log(`  Webhook: Auto-fix: ${result.applied}/${result.total} for ${bump.packageName}`);
+    if (result.applied > 0) {
+      await commentOnPR(owner, repoName, bump.prNumber,
+        `🔧 Auto-applied ${result.applied} fix(es) (attempt ${(bump.fixAttempts ?? 0) + 1}/${MAX_FIX_ATTEMPTS}). CI will re-run.`);
+    }
+  } catch (err) {
+    console.error(`  Webhook: Auto-fix error for ${bump.packageName}:`, err);
+  }
+
+  await updateBumps(campaignId, [{
+    packageName: bump.packageName,
+    fields: { verdict: analysisVerdict, fixingAt: undefined },
+  }]);
+}
+
 async function handleCICompletion(owner: string, repoName: string, branches: string[], webhookSha: string): Promise<void> {
   const campaigns = await listCampaigns();
   const active = campaigns.find(
@@ -95,7 +146,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
 
   const matchedBumps = active.plan.filter((b) => {
     const branchName = `depbot-triage/${b.packageName}-${b.targetVersion}`;
-    return branches.includes(branchName) && b.prNumber && b.verdict !== 'reanalysing';
+    return branches.includes(branchName) && b.prNumber && b.verdict !== 'reanalysing' && b.verdict !== 'fixing';
   });
 
   if (matchedBumps.length === 0) return;
@@ -159,6 +210,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
           }]);
           await commentOnPR(owner, repoName, bump.prNumber!,
             `✅ **CI passed.** Re-analysed — verdict updated to **${result.verdict}**.`);
+          await tryAutoFix(active.id, owner, repoName, bump, result.verdict, result.findings);
         } catch (err) {
           await clearReanalysing(active.id, bump.packageName, prevVerdict);
           console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
@@ -203,6 +255,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
             }]);
             await commentOnPR(owner, repoName, bump.prNumber!,
               `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
+            await tryAutoFix(active.id, owner, repoName, bump, result.verdict, result.findings, enrichedErrors);
           } catch (err) {
             await clearReanalysing(active.id, bump.packageName, prevVerdict);
             console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
@@ -219,7 +272,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
   const updated = await getCampaign(active.id);
   if (!updated) return;
   const allResolved = updated.plan.every(
-    (b) => !b.prNumber || (b.verdict !== 'reanalysing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
+    (b) => !b.prNumber || (b.verdict !== 'reanalysing' && b.verdict !== 'fixing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
   );
   if (allResolved) {
     console.log(`  Webhook: All CI resolved for campaign ${active.id}, marking done.`);

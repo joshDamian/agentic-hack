@@ -11,6 +11,7 @@ export const applyFixFlow = ai.defineFlow(
       campaignId: z.string(),
       packageName: z.string(),
       findingIndices: z.array(z.number()),
+      ciErrors: z.string().optional(),
     }),
     outputSchema: z.object({
       success: z.boolean(),
@@ -19,7 +20,7 @@ export const applyFixFlow = ai.defineFlow(
       total: z.number(),
     }),
   },
-  async ({ campaignId, packageName, findingIndices }) => {
+  async ({ campaignId, packageName, findingIndices, ciErrors }) => {
     const campaign = await getCampaign(campaignId);
     if (!campaign) return { success: false, message: 'Campaign not found', applied: 0, total: 0 };
 
@@ -39,8 +40,11 @@ export const applyFixFlow = ai.defineFlow(
     const findingDescriptions = targets.map(({ finding }, i) => {
       const f = finding!;
       let desc = `### Fix ${i + 1}: ${f.file}:${f.line}\n**Analysis:** ${f.analysis}`;
+      if (f.originalCode) {
+        desc += `\n**Current code:**\n\`\`\`\n${f.originalCode}\n\`\`\``;
+      }
       if (f.fixKind === 'remove') {
-        desc += `\n**Action:** Remove the code entirely.\n\`\`\`\n${f.originalCode}\n\`\`\``;
+        desc += `\n**Action:** Remove the code entirely.`;
       } else if (f.suggestedFix) {
         desc += `\n**Suggested fix:**\n\`\`\`\n${f.suggestedFix}\n\`\`\``;
       } else {
@@ -49,13 +53,33 @@ export const applyFixFlow = ai.defineFlow(
       return desc;
     }).join('\n\n');
 
-    const prompt = `Apply ${targets.length} fix${targets.length > 1 ? 'es' : ''} to **${owner}/${repo}** on branch **${branchName}**.
+    const sections: string[] = [
+      `Apply ${targets.length} fix${targets.length > 1 ? 'es' : ''} to **${owner}/${repo}** on branch **${branchName}**.`,
+      `**Package upgrade:** ${bump.packageName} ${bump.currentVersion} → ${bump.targetVersion}`,
+    ];
 
-**Package upgrade:** ${bump.packageName} ${bump.currentVersion} → ${bump.targetVersion}
+    if (bump.breakingChanges?.length) {
+      const changes = bump.breakingChanges.map((bc) => {
+        let line = `- **${bc.api}** (${bc.kind}): ${bc.description}`;
+        if (bc.migrationHint) line += ` → ${bc.migrationHint}`;
+        return line;
+      }).join('\n');
+      sections.push(`**Breaking changes in this upgrade:**\n${changes}`);
+    }
 
-${findingDescriptions}
+    if (ciErrors) {
+      sections.push(`**CI error output (ground truth — the build is currently broken):**\n\`\`\`\n${ciErrors.slice(0, 6000)}\n\`\`\``);
+    }
 
-Read each affected file, apply all fixes, then commit. You can make multiple commitFix calls if needed (one per file, or group related changes). Use owner="${owner}", repo="${repo}", branch="${branchName}".`;
+    const attempt = (bump.fixAttempts ?? 0) + 1;
+    if (attempt > 1) {
+      sections.push(`**This is fix attempt ${attempt}/${5}.** Previous attempts did not fully resolve the issues. Read the branch commit history and the current file state before applying — don't repeat a fix that already failed.`);
+    }
+
+    sections.push(findingDescriptions);
+    sections.push(`Read each affected file first, then apply fixes. Use owner="${owner}", repo="${repo}", branch="${branchName}". After committing, run runCompileCheck to verify — if it fails, fix the new errors before finishing.`);
+
+    const prompt = sections.join('\n\n');
 
     for (const { index } of targets) {
       await updateFinding(campaignId, packageName, index, { fixStatus: 'coding' });

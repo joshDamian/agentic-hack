@@ -342,7 +342,7 @@ function renderBumpRow(c: Campaign, b: PlannedBump, i: number): string {
       <span class="bump-pkg">${esc(b.packageName)}</span>
       <span class="bump-ver">${esc(b.currentVersion)} &rarr; ${esc(b.targetVersion)}</span>
       <span class="bump-alerts">${b.alertsClosed}</span>
-      <span>${verdict === 'reanalysing' ? '<span class="verdict reanalysing"><span class="spinner spinner-sm"></span> analysing</span>' : `<span class="verdict ${verdict}">${verdict}</span>`}</span>
+      <span>${verdict === 'reanalysing' ? '<span class="verdict reanalysing"><span class="spinner spinner-sm"></span> analysing</span>' : verdict === 'fixing' ? '<span class="verdict fixing"><span class="spinner spinner-sm"></span> fixing</span>' : `<span class="verdict ${verdict}">${verdict}</span>`}</span>
       <span>${prCell}</span>
       <span>${ciCell}</span>
     </div>
@@ -988,8 +988,8 @@ main { max-width: 1020px; margin: 0 auto; padding: 1.75rem 1.5rem 3rem; }
 .verdict.safe { background: var(--safe-bg); color: var(--safe-text); }
 .verdict.risky { background: var(--risk-bg); color: var(--risk-text); }
 .verdict.unknown { background: var(--warn-bg); color: var(--warn-text); }
-.verdict.reanalysing { background: var(--accent-dim); color: var(--accent); }
-.bump-row.v-reanalysing::before { background: var(--accent); }
+.verdict.reanalysing, .verdict.fixing { background: var(--accent-dim); color: var(--accent); }
+.bump-row.v-reanalysing::before, .bump-row.v-fixing::before { background: var(--accent); }
 .verdict.pending { background: var(--pending-bg); color: var(--text-faint); }
 
 .pr-link {

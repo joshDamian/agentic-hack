@@ -83,12 +83,8 @@ export async function updateBumps(
   });
 }
 
-const REANALYSING_TIMEOUT = 10 * 60_000;
+const LEASE_TIMEOUT = 10 * 60_000;
 
-/**
- * Lease acquire: atomically set verdict to 'reanalysing' if no other actor owns the bump.
- * Returns the previous verdict on success, null if blocked.
- */
 export async function setReanalysing(
   campaignId: string,
   packageName: string,
@@ -102,7 +98,11 @@ export async function setReanalysing(
     if (!bump) return null;
     if (bump.findings?.some((f) => f.fixStatus === 'coding')) return null;
     if (bump.verdict === 'reanalysing') {
-      const stale = bump.reanalysingAt && Date.now() - new Date(bump.reanalysingAt).getTime() > REANALYSING_TIMEOUT;
+      const stale = bump.reanalysingAt && Date.now() - new Date(bump.reanalysingAt).getTime() > LEASE_TIMEOUT;
+      if (!stale) return null;
+    }
+    if (bump.verdict === 'fixing') {
+      const stale = bump.fixingAt && Date.now() - new Date(bump.fixingAt).getTime() > LEASE_TIMEOUT;
       if (!stale) return null;
     }
     const prev = bump.verdict ?? 'unknown';
