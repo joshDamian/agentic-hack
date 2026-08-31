@@ -1,9 +1,9 @@
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 import { getCampaign, updateBumps, setReanalysing, clearReanalysing } from './tools/firestore/client.js';
-import { classifyBump } from './agents/safety/index.js';
+import { classifyBump, reanalyseWithCIErrors } from './agents/safety/index.js';
 import { postAnalysisReview } from './tools/github/pr.js';
-import { commentOnPR } from './tools/github/ci.js';
+import { commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
 
 interface Finding {
   file: string;
@@ -92,7 +92,13 @@ export const reanalyseFlow = ai.defineFlow(
 
     let result;
     try {
-      result = await classifyBump(campaign.repoOwner, campaign.repoName, bump, branchRef);
+      let ciErrors: string | null = null;
+      if (bump.ciStatus === 'failure' && bump.prNumber) {
+        ciErrors = await getCIFailureLogs(campaign.repoOwner, campaign.repoName, bump.prNumber);
+      }
+      result = ciErrors
+        ? await reanalyseWithCIErrors(campaign.repoOwner, campaign.repoName, bump, ciErrors)
+        : await classifyBump(campaign.repoOwner, campaign.repoName, bump, branchRef);
     } catch (err) {
       await clearReanalysing(campaignId, packageName, prevVerdict);
       throw err;
