@@ -11,7 +11,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@genkit-ai/express": "^1.41.0",
     "@genkit-ai/google-genai": "^1.41.0",

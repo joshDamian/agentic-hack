@@ -1,7 +1,5 @@
 import { z } from 'genkit';
-import { vertexAI } from '@genkit-ai/google-genai';
-import { ai } from '../../genkit.js';
-import { config } from '../../shared/config.js';
+import { ai, classificationModel } from '../../genkit.js';
 import {
   readRepoFile,
   runCompileCheck,
@@ -27,7 +25,7 @@ export const verdictSchema = z.object({
 
 export const safetyAgent = ai.defineAgent({
   name: 'safetyAnalyser',
-  model: vertexAI.model(config.classificationModel),
+  model: classificationModel,
   tools: [readRepoFile, runCompileCheck, getTypeDiffTool, getPackageDocs],
   maxTurns: 10,
   system: `You are a dependency upgrade safety analyser. Your job is to determine whether upgrading a package will break the codebase.

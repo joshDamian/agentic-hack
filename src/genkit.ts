@@ -11,3 +11,5 @@ export const ai = genkit({
   ],
   model: vertexAI.model(config.extractionModel),
 });
+
+export const classificationModel = vertexAI.model(config.classificationModel);

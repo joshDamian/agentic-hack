@@ -1,7 +1,5 @@
 import { z } from 'genkit';
-import { vertexAI } from '@genkit-ai/google-genai';
-import { ai } from '../../genkit.js';
-import { config } from '../../shared/config.js';
+import { ai, classificationModel } from '../../genkit.js';
 import { readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck, getPackageDocs } from '../../tools/agent-tools.js';
 import { getInstallationOctokit, getFileContent } from '../../tools/github/client.js';
 import { bustSnapshot } from '../../tools/github/zipball.js';
@@ -87,7 +85,7 @@ const commitFixTool = ai.defineTool(
 
 export const coderAgent = ai.defineAgent({
   name: 'codingAssistant',
-  model: vertexAI.model(config.classificationModel),
+  model: classificationModel,
   tools: [readRepoFile, listRepoFiles, searchCodeInRepo, runCompileCheck, getPackageDocs, commitFixTool],
   maxTurns: 20,
   system: `You are a coding assistant that applies fixes for breaking dependency upgrades.

@@ -93,7 +93,7 @@ Push back only when the concern is real. Disagreement for its own sake wastes ti
 
 ## Already decided — don't relitigate
 
-- Stack: TypeScript, Genkit, `@genkit-ai/google-genai`, `gemini-3.5-flash` for extraction and `gemini-3.5-pro` for classification.
+- Stack: TypeScript, Genkit, `@genkit-ai/google-genai`, `gemini-3.5-flash` for extraction and `gemini-3.1-pro` for classification.
 - Region: `europe-west3` for everything (Cloud Run, Firestore, Scheduler, Artifact Registry).
 - Idea: dependency alert triage agent, submitted under **The Taskmaster** track, second category **Individual / Hobbyist**.
 - Architecture: four-agent pipeline (Prioritiser, Safety Analyser, Executor, Monitor).
