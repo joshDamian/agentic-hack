@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from './shared/config.js';
 import { getCampaign, listCampaigns, updateBumps, updateCampaign, setReanalysing, clearReanalysing } from './tools/firestore/client.js';
-import { getPRCIStatus, commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
+import { getPRCIStatus, commentOnPR, getCIFailureLogs, type CIStatus } from './tools/github/ci.js';
 import { getInstallationOctokit } from './tools/github/client.js';
 import { classifyBump, reanalyseWithCIErrors } from './agents/safety/index.js';
 import type { Campaign, PlannedBump } from './shared/types.js';
@@ -87,6 +87,21 @@ async function waitForFixCompletion(campaignId: string, packageName: string): Pr
   return null;
 }
 
+const CI_POLL_INTERVAL = 15_000;
+const CI_POLL_MAX_WAIT = 5 * 60_000;
+
+async function pollCICompletion(owner: string, repo: string, prNumber: number): Promise<CIStatus | null> {
+  const deadline = Date.now() + CI_POLL_MAX_WAIT;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, CI_POLL_INTERVAL));
+    try {
+      const { status } = await getPRCIStatus(owner, repo, prNumber);
+      if (status !== 'pending') return status;
+    } catch {}
+  }
+  return null;
+}
+
 function getFixableIndices(findings: PlannedBump['findings']): number[] {
   if (!findings) return [];
   return findings
@@ -134,6 +149,13 @@ async function tryAutoFix(
     packageName: bump.packageName,
     fields: { verdict: undefined, fixingAt: undefined },
   }]);
+
+  if (!bump.prNumber) return;
+  const ciResult = await pollCICompletion(owner, repoName, bump.prNumber);
+  if (ciResult) {
+    await updateBumps(campaignId, [{ packageName: bump.packageName, fields: { ciStatus: ciResult } }]);
+    console.log(`  Webhook: Post-fix CI for ${bump.packageName}: ${ciResult}`);
+  }
 }
 
 async function handleCICompletion(owner: string, repoName: string, branches: string[], webhookSha: string): Promise<void> {
