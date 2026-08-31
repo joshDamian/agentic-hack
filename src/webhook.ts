@@ -5,7 +5,7 @@ import { getCampaign, listCampaigns, updateBumps, updateCampaign, setReanalysing
 import { getPRCIStatus, commentOnPR, getCIFailureLogs } from './tools/github/ci.js';
 import { getInstallationOctokit } from './tools/github/client.js';
 import { classifyBump, reanalyseWithCIErrors } from './agents/safety/index.js';
-import type { BumpVerdict, Campaign, PlannedBump } from './shared/types.js';
+import type { Campaign, PlannedBump } from './shared/types.js';
 import { applyFixFlow } from './agents/coder/apply-fix.js';
 
 const MAX_FIX_ATTEMPTS = 5;
@@ -100,7 +100,6 @@ async function tryAutoFix(
   owner: string,
   repoName: string,
   bump: PlannedBump,
-  analysisVerdict: BumpVerdict,
   findings: PlannedBump['findings'],
   ciErrors?: string,
 ): Promise<void> {
@@ -133,7 +132,7 @@ async function tryAutoFix(
 
   await updateBumps(campaignId, [{
     packageName: bump.packageName,
-    fields: { verdict: analysisVerdict, fixingAt: undefined },
+    fields: { verdict: undefined, fixingAt: undefined },
   }]);
 }
 
@@ -214,7 +213,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
           }]);
           await commentOnPR(owner, repoName, bump.prNumber!,
             `✅ **CI passed.** Re-analysed — verdict updated to **${result.verdict}**.`);
-          await tryAutoFix(active.id, owner, repoName, bump, result.verdict, result.findings);
+          await tryAutoFix(active.id, owner, repoName, bump, result.findings);
         } catch (err) {
           await clearReanalysing(active.id, bump.packageName, prevVerdict);
           console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
@@ -259,7 +258,7 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
             }]);
             await commentOnPR(owner, repoName, bump.prNumber!,
               `❌ **CI failed.** Re-analysed with CI errors — verdict updated to **${result.verdict}**.\n\nDetails: ${details}`);
-            await tryAutoFix(active.id, owner, repoName, bump, result.verdict, result.findings, enrichedErrors);
+            await tryAutoFix(active.id, owner, repoName, bump, result.findings, enrichedErrors);
           } catch (err) {
             await clearReanalysing(active.id, bump.packageName, prevVerdict);
             console.error(`  Webhook: Re-analysis failed for ${bump.packageName}:`, err);
