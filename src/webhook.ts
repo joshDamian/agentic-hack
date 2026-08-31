@@ -151,7 +151,11 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
 
   if (matchedBumps.length === 0) return;
 
-  for (let bump of matchedBumps) {
+  for (const matched of matchedBumps) {
+    const fresh = await getCampaign(active.id);
+    let bump = fresh?.plan.find((b) => b.packageName === matched.packageName);
+    if (!bump || bump.verdict === 'reanalysing' || bump.verdict === 'fixing') continue;
+
     const fixing = bump.findings?.some((f) => f.fixStatus === 'coding');
     if (fixing) {
       console.log(`  Webhook: ${bump.packageName} has fix in progress, waiting...`);
