@@ -190,8 +190,9 @@ async function resumeCampaign(
 
   const fresh = await getCampaign(campaignId);
   const currentPlan = fresh?.plan ?? bumps;
+  const terminalVerdicts = new Set(['safe', 'risky', 'unknown']);
   const allResolved = currentPlan.every(
-    (b) => !b.prNumber || (b.verdict !== 'reanalysing' && b.verdict !== 'fixing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
+    (b) => !b.prNumber || (terminalVerdicts.has(b.verdict ?? '') && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
   );
   if (allResolved) {
     await updateCampaign(campaignId, { status: 'done', completedAt: new Date().toISOString() });

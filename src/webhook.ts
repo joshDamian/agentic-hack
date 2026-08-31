@@ -119,44 +119,109 @@ async function tryAutoFix(
   findings: PlannedBump['findings'],
   ciErrors?: string,
 ): Promise<void> {
-  const fixable = getFixableIndices(findings);
-  if (fixable.length === 0) return;
-  if ((bump.fixAttempts ?? 0) >= MAX_FIX_ATTEMPTS) return;
   if (!bump.prNumber) return;
+  const prNumber = bump.prNumber;
+  const branchRef = `depbot-triage/${bump.packageName}-${bump.targetVersion}`;
+  let currentFindings = findings;
+  let currentCIErrors = ciErrors;
+  let attempts = bump.fixAttempts ?? 0;
 
-  console.log(`  Webhook: Auto-fixing ${fixable.length} finding(s) for ${bump.packageName}...`);
-  await updateBumps(campaignId, [{
-    packageName: bump.packageName,
-    fields: { verdict: 'fixing', fixingAt: new Date().toISOString() },
-  }]);
+  while (attempts < MAX_FIX_ATTEMPTS) {
+    const fixable = getFixableIndices(currentFindings);
+    if (fixable.length === 0) return;
 
-  try {
-    const result = await applyFixFlow({
-      campaignId,
+    console.log(`  Webhook: Auto-fixing ${fixable.length} finding(s) for ${bump.packageName} (attempt ${attempts + 1})...`);
+    await updateBumps(campaignId, [{
       packageName: bump.packageName,
-      findingIndices: fixable,
-      ciErrors,
-    });
-    console.log(`  Webhook: Auto-fix: ${result.applied}/${result.total} for ${bump.packageName}`);
-    if (result.applied > 0) {
-      await commentOnPR(owner, repoName, bump.prNumber,
-        `🔧 Auto-applied ${result.applied} fix(es) (attempt ${(bump.fixAttempts ?? 0) + 1}/${MAX_FIX_ATTEMPTS}). CI will re-run.`);
+      fields: { verdict: 'fixing', fixingAt: new Date().toISOString() },
+    }]);
+
+    let applied = 0;
+    try {
+      const result = await applyFixFlow({
+        campaignId,
+        packageName: bump.packageName,
+        findingIndices: fixable,
+        ciErrors: currentCIErrors,
+      });
+      applied = result.applied;
+      console.log(`  Webhook: Auto-fix: ${applied}/${result.total} for ${bump.packageName}`);
+      if (applied > 0) {
+        await commentOnPR(owner, repoName, prNumber,
+          `🔧 Auto-applied ${applied} fix(es) (attempt ${attempts + 1}/${MAX_FIX_ATTEMPTS}). CI will re-run.`);
+      }
+    } catch (err) {
+      console.error(`  Webhook: Auto-fix error for ${bump.packageName}:`, err);
     }
-  } catch (err) {
-    console.error(`  Webhook: Auto-fix error for ${bump.packageName}:`, err);
-  }
 
-  await updateBumps(campaignId, [{
-    packageName: bump.packageName,
-    fields: { verdict: undefined, fixingAt: undefined },
-  }]);
+    if (applied === 0) {
+      await updateBumps(campaignId, [{
+        packageName: bump.packageName,
+        fields: { verdict: 'risky', fixingAt: undefined },
+      }]);
+      return;
+    }
 
-  if (!bump.prNumber) return;
-  const ciResult = await pollCICompletion(owner, repoName, bump.prNumber);
-  if (ciResult) {
+    attempts++;
+
+    const ciResult = await pollCICompletion(owner, repoName, prNumber);
+    if (!ciResult) {
+      console.log(`  Webhook: CI poll timed out for ${bump.packageName}`);
+      await updateBumps(campaignId, [{
+        packageName: bump.packageName,
+        fields: { verdict: 'risky', fixingAt: undefined },
+      }]);
+      return;
+    }
+
     await updateBumps(campaignId, [{ packageName: bump.packageName, fields: { ciStatus: ciResult } }]);
     console.log(`  Webhook: Post-fix CI for ${bump.packageName}: ${ciResult}`);
+
+    // Re-read bump for fresh findings/verdict context
+    const freshCampaign = await getCampaign(campaignId);
+    const freshBump = freshCampaign?.plan.find((b) => b.packageName === bump.packageName);
+    if (!freshBump) return;
+
+    try {
+      let result;
+      if (ciResult === 'failure') {
+        const logs = await getCIFailureLogs(owner, repoName, prNumber);
+        const commitHistory = await getBranchCommitHistory(owner, repoName, branchRef);
+        currentCIErrors = commitHistory ? `${logs}\n\nPrevious fix attempts on this branch:\n${commitHistory}` : (logs ?? '');
+        result = await reanalyseWithCIErrors(owner, repoName, freshBump, currentCIErrors);
+      } else {
+        result = await classifyBump(owner, repoName, freshBump, branchRef);
+      }
+      await updateBumps(campaignId, [{
+        packageName: bump.packageName,
+        mergeNewFindings: true,
+        fields: {
+          verdict: result.verdict,
+          verdictReason: result.reason,
+          breakingChanges: result.breakingChanges,
+          findings: result.findings,
+          fixingAt: undefined,
+        },
+      }]);
+      await commentOnPR(owner, repoName, prNumber,
+        ciResult === 'failure'
+          ? `❌ **CI failed** after fix. Re-analysed — verdict: **${result.verdict}**.`
+          : `✅ **CI passed** after fix. Re-analysed — verdict: **${result.verdict}**.`);
+
+      if (result.verdict === 'safe' || ciResult === 'success') return;
+
+      currentFindings = result.findings;
+    } catch (err) {
+      await updateBumps(campaignId, [{
+        packageName: bump.packageName,
+        fields: { verdict: 'risky', fixingAt: undefined },
+      }]);
+      console.error(`  Webhook: Post-fix re-analysis failed for ${bump.packageName}:`, err);
+      return;
+    }
   }
+
+  console.log(`  Webhook: ${bump.packageName} exhausted fix attempts (${MAX_FIX_ATTEMPTS})`);
 }
 
 async function processBump(
@@ -306,8 +371,9 @@ async function handleCICompletion(owner: string, repoName: string, branches: str
   // Re-read after all bumps processed to check if everything is resolved
   const updated = await getCampaign(active.id);
   if (!updated) return;
+  const terminalVerdicts = new Set(['safe', 'risky', 'unknown']);
   const allResolved = updated.plan.every(
-    (b) => !b.prNumber || (b.verdict !== 'reanalysing' && b.verdict !== 'fixing' && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
+    (b) => !b.prNumber || (terminalVerdicts.has(b.verdict ?? '') && /^(success|failure|no-checks)$/.test(b.ciStatus ?? '')),
   );
   if (allResolved) {
     console.log(`  Webhook: All CI resolved for campaign ${active.id}, marking done.`);
