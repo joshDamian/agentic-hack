@@ -37,6 +37,31 @@ hljs.registerLanguage('php', php);
 const SCHEDULE_HOUR = Number(process.env.PIPELINE_SCHEDULE_HOUR ?? '2');
 const SCHEDULE_TZ = process.env.PIPELINE_TIMEZONE ?? 'Africa/Lagos';
 
+function getNextRunEpoch(): number {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: SCHEDULE_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(new Date()).map((p) => [p.type, p.value]),
+  );
+  const localIso = `${parts.year}-${parts.month}-${parts.day}T${String(SCHEDULE_HOUR).padStart(2, '0')}:00:00`;
+  const nowLocal = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+  let next = new Date(localIso + getUtcOffset(SCHEDULE_TZ));
+  if (next.getTime() <= new Date(nowLocal + getUtcOffset(SCHEDULE_TZ)).getTime()) {
+    next = new Date(next.getTime() + 86400000);
+  }
+  return next.getTime();
+}
+
+function getUtcOffset(tz: string): string {
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' });
+  const match = fmt.format(new Date()).match(/GMT([+-]\d{2}:\d{2})/);
+  return match ? match[1] : '+00:00';
+}
+
 function resolveRepo(
   repoParam: string | undefined,
   campaigns: Campaign[],
@@ -173,7 +198,7 @@ function renderTopbar(repo: { owner: string; name: string }, active: boolean, st
     <div class="topbar-spacer"></div>
     <div class="schedule">
       <div class="schedule-dot"></div>
-      <span>Next run</span>
+      <span>Next automated run</span>
       <span class="schedule-time" id="countdown">—</span>
     </div>
     ${stuck ? `<button class="run-btn" onclick="triggerRun(false)"><svg viewBox="0 0 12 14"><polygon points="2,0 12,7 2,14"/></svg> Resume</button>
@@ -661,15 +686,12 @@ function switchRepo(value) {
   } catch (e) { console.error('Failed to load repos:', e); }
 })();
 
+var nextRunEpoch = ${getNextRunEpoch()};
 function updateCountdown() {
   var el = document.getElementById('countdown');
   if (!el) return;
-  var now = new Date();
-  var local = new Date(now.toLocaleString('en-US', { timeZone: '${SCHEDULE_TZ}' }));
-  var next = new Date(local);
-  next.setHours(${SCHEDULE_HOUR}, 0, 0, 0);
-  if (next <= local) next.setDate(next.getDate() + 1);
-  var diff = next.getTime() - local.getTime();
+  var diff = nextRunEpoch - Date.now();
+  if (diff <= 0) { el.textContent = 'now'; return; }
   var h = Math.floor(diff / 3600000);
   var m = Math.floor((diff % 3600000) / 60000);
   el.textContent = 'in ' + h + 'h ' + m + 'm';
