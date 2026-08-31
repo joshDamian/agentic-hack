@@ -35,24 +35,26 @@ When the Safety Analyser finds fixable breaking changes, the Coder Agent takes o
 The entire cycle — fix, poll, re-analyse, retry — runs as a self-contained loop inside the webhook handler. No human interaction required.
 
 ## Architecture
+<img width="1856" height="1044" alt="slide-04" src="https://github.com/user-attachments/assets/be1b63b0-923d-4535-ae80-796f43c2df1d" />
+
 
 ```
 src/
-  agents/
-    prioritiser/    plan bumps from alerts
-    safety/         changelog + code analysis + verdict
-    executor/       branch, PR, review
-    monitor/        CI polling (folded into webhook handler)
-    coder/          autonomous fix agent
-  tools/
-    github/         Octokit client, PR creation, CI status, zipball cache
-    firestore/      campaign state, transactional leases
-    npm/            compile checks, registry, type diffs
-  shared/           types, config, concurrency
-  pipeline.ts       orchestrates the four agents
-  webhook.ts        GitHub webhook handler + fix cycle
-  reanalyse.ts      manual re-analysis trigger
-  dashboard.ts      live status page
+├── agents/
+│   ├── prioritiser/    plan bumps from alerts
+│   ├── safety/         changelog + code analysis + verdict
+│   ├── executor/       branch, PR, review
+│   ├── monitor/        CI polling (folded into webhook handler)
+│   └── coder/          autonomous fix agent
+├── tools/
+│   ├── github/         Octokit client, PR creation, CI status, zipball cache
+│   ├── firestore/      campaign state, transactional leases
+│   └── npm/            compile checks, registry, type diffs
+├── shared/             types, config, concurrency
+├── pipeline.ts         orchestrates the four agents
+├── webhook.ts          GitHub webhook handler + fix cycle
+├── reanalyse.ts        manual re-analysis trigger
+└── dashboard.ts        live status page
 ```
 
 State is separated from logic. Each bump's verdict and CI status live in a Firestore campaign document. Concurrent webhook events are serialised with a transactional lease pattern (verdict set to `reanalysing` or `fixing` with a timestamp; 10-minute timeout for crash recovery).
